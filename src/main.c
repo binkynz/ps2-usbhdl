@@ -32,15 +32,40 @@ extern unsigned char bdm_irx[];           extern unsigned int size_bdm_irx;
 extern unsigned char bdmfs_fatfs_irx[];   extern unsigned int size_bdmfs_fatfs_irx;
 extern unsigned char usbmass_bd_irx[];    extern unsigned int size_usbmass_bd_irx;
 
-/* HDL partition layout constants — derived from hdl-dump source.
- * The main partition reserves 0x2000 sectors (4 MB) at the start
- * for the HDL header zone (APA + ICON3D + system.cnf + icon + KELF).
- * Sub-partitions reserve 0x800 sectors (1 MB). APA partitions are
- * allocated in 128 MB grains and capped at 16 GB each. */
+/* HDL partition layout constants. Main partitions reserve 4 MB
+ * for the HDL header zone (APA + ICON3D + system.cnf + icon + KELF);
+ * sub-partitions reserve ~1 MB. The APA driver only accepts six
+ * specific size strings ("128M" through "4G") — listed below in
+ * APA_BUCKETS — so we round up to one of those rather than to an
+ * arbitrary 128 MB grain. The hardware APA cap is 16 GB per
+ * partition, but HDLFS records slice size in a 32-bit field and
+ * overflows at 4 GB, so 4 GB is our effective ceiling. */
 #define HDL_MAIN_RESERVE_MB     4
 #define HDL_SUB_RESERVE_MB      1
-#define APA_GRAIN_MB            128
-#define APA_MAX_PARTITION_MB    16384
+#define HDL_MAX_PARTITION_MB    4096
+
+struct apa_bucket {
+	const char *str;
+	uint32_t mb;
+};
+static const struct apa_bucket APA_BUCKETS[] = {
+	{ "128M",  128 },
+	{ "256M",  256 },
+	{ "512M",  512 },
+	{ "1G",   1024 },
+	{ "2G",   2048 },
+	{ "4G",   4096 },
+};
+#define APA_BUCKET_COUNT (sizeof(APA_BUCKETS) / sizeof(APA_BUCKETS[0]))
+
+/* Smallest bucket whose size >= needed_mb. Returns the largest bucket
+ * if nothing is big enough (caller is expected to spill to subs). */
+static int pick_bucket(uint32_t needed_mb)
+{
+	for (size_t i = 0; i < APA_BUCKET_COUNT; i++)
+		if (APA_BUCKETS[i].mb >= needed_mb) return (int)i;
+	return APA_BUCKET_COUNT - 1;
+}
 
 /* ps2hdd-hdl.irx wants -o N -n N (max open files, max mounts) as a
  * null-separated argv blob with arg_len = sizeof(buffer). The
@@ -168,7 +193,8 @@ typedef struct {
 	uint32_t iso_sectors_2k;     /* PVD blocks × block_size / 2048 */
 	char partition_name[33];     /* APA partition name, e.g. PP.HDL.SCES_503.62 */
 	uint32_t main_part_size_mb;
-	int subs_needed;             /* >0 only for ISOs > ~16 GB */
+	const char *main_size_str;   /* APA bucket label, e.g. "4G" */
+	int subs_needed;             /* >0 only for ISOs > ~4 GB */
 	uint32_t subs_total_size_mb;
 	uint8_t  disc_type;          /* HDLFS DiscType: 0x12 CD / 0x14 DVD */
 	uint32_t layer1_start;       /* 0 unless DVD9 */
@@ -178,11 +204,6 @@ typedef struct {
 	uint32_t lba;
 	uint32_t size;
 } iso_extent_t;
-
-static uint32_t round_up_to(uint32_t v, uint32_t grain)
-{
-	return ((v + grain - 1) / grain) * grain;
-}
 
 /* Keep [A-Z0-9_.]; uppercase a-z; drop everything else. Truncate.
  * Dots are allowed because canonical PS2 startup ids contain them
@@ -364,30 +385,28 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 	snprintf(plan->partition_name, sizeof(plan->partition_name),
 	         "PP.HDL.%.24s", san);
 
-	/* Size the main partition. If iso + 4 MB header fits in 16 GB,
-	 * one main partition is enough (rounded up to 128 MB grain). */
+	/* Size the main partition by picking the smallest APA bucket
+	 * that fits iso + header reserve. If even the largest bucket
+	 * (4 GB) isn't enough, spill the rest into sub-partitions. */
 	uint32_t needed_mb = plan->iso_size_mb + HDL_MAIN_RESERVE_MB;
-	if (needed_mb <= APA_MAX_PARTITION_MB) {
-		plan->main_part_size_mb = round_up_to(needed_mb, APA_GRAIN_MB);
-		plan->subs_needed = 0;
+	if (needed_mb <= HDL_MAX_PARTITION_MB) {
+		int bk = pick_bucket(needed_mb);
+		plan->main_part_size_mb = APA_BUCKETS[bk].mb;
+		plan->main_size_str     = APA_BUCKETS[bk].str;
+		plan->subs_needed       = 0;
 		plan->subs_total_size_mb = 0;
 	} else {
-		/* Larger games need sub-partitions. Each sub stores
-		 * (sub_size - 1 MB) of data, capped at 16 GB. */
-		plan->main_part_size_mb = APA_MAX_PARTITION_MB;
-		uint32_t main_data = APA_MAX_PARTITION_MB - HDL_MAIN_RESERVE_MB;
+		plan->main_part_size_mb  = HDL_MAX_PARTITION_MB;
+		plan->main_size_str      = APA_BUCKETS[APA_BUCKET_COUNT - 1].str;
+		uint32_t main_data = HDL_MAX_PARTITION_MB - HDL_MAIN_RESERVE_MB;
 		uint32_t remaining = plan->iso_size_mb - main_data;
+		plan->subs_needed        = 0;
+		plan->subs_total_size_mb = 0;
 		while (remaining > 0) {
-			uint32_t this_data;
-			uint32_t this_part;
-			if (remaining + HDL_SUB_RESERVE_MB > APA_MAX_PARTITION_MB) {
-				this_part = APA_MAX_PARTITION_MB;
-				this_data = APA_MAX_PARTITION_MB - HDL_SUB_RESERVE_MB;
-			} else {
-				this_part = round_up_to(remaining + HDL_SUB_RESERVE_MB,
-				                        APA_GRAIN_MB);
-				this_data = remaining;
-			}
+			int bk = pick_bucket(remaining + HDL_SUB_RESERVE_MB);
+			uint32_t this_part = APA_BUCKETS[bk].mb;
+			uint32_t this_data = this_part - HDL_SUB_RESERVE_MB;
+			if (this_data > remaining) this_data = remaining;
 			plan->subs_needed++;
 			plan->subs_total_size_mb += this_part;
 			remaining -= this_data;
@@ -464,8 +483,8 @@ static int execute_install(const install_plan_t *plan)
 	char create_cmd[80];    /* hdd0:<name>,,,SIZE,HDL */
 	snprintf(hdd_path,   sizeof(hdd_path),   "hdd0:%s",
 	         plan->partition_name);
-	snprintf(create_cmd, sizeof(create_cmd), "%s,,,%uM,HDL",
-	         hdd_path, (unsigned)plan->main_part_size_mb);
+	snprintf(create_cmd, sizeof(create_cmd), "%s,,,%s,HDL",
+	         hdd_path, plan->main_size_str);
 
 	scr_printf("  fileXioOpen: %s\n", create_cmd);
 	int fd = fileXioOpen(create_cmd, O_WRONLY | O_CREAT | O_TRUNC, 0644);
