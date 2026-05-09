@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -413,12 +414,32 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 	plan->iso_size_mb = (uint32_t)((blocks * (uint64_t)bsz) >> 20);
 	plan->iso_sectors_2k = (uint32_t)((blocks * (uint64_t)bsz) >> 11);
 
-	/* Disc type and layer break heuristics. CD ISOs are usually
-	 * <800 MB; anything bigger is a DVD. DVD9 (>4.7 GB) needs a
-	 * layer-break offset, but detecting that from an ISO file alone
-	 * isn't trivial — we punt for now; single-layer DVDs work. */
+	/* Disc type. CD ISOs are usually <800 MB; anything bigger is a
+	 * DVD. */
 	plan->disc_type = (plan->iso_size_mb < 800) ? 0x12 : 0x14;
+
+	/* Layer-1 start. Single-layer discs use 0. DVD9 needs the
+	 * sector offset of layer 1, which can't be cleanly recovered
+	 * from a bare ISO file (it lives in the disc's structural
+	 * descriptors, not the filesystem). Accept a sidecar override
+	 * at "<iso-path>.layer_break" containing a decimal sector
+	 * count; if absent, default to 0 and the user gets a warning
+	 * later for DVD9-sized ISOs. */
 	plan->layer1_start = 0;
+	{
+		char sidecar[320];
+		snprintf(sidecar, sizeof(sidecar), "%s.layer_break", iso_path);
+		int sc = open(sidecar, O_RDONLY);
+		if (sc >= 0) {
+			char buf[32] = {0};
+			int n = read(sc, buf, sizeof(buf) - 1);
+			close(sc);
+			if (n > 0) {
+				buf[n] = 0;
+				plan->layer1_start = (uint32_t)atoi(buf);
+			}
+		}
+	}
 
 	/* Best-effort startup id from SYSTEM.CNF. If it fails we still
 	 * have a usable plan, just with a less-canonical partition name. */
@@ -487,6 +508,8 @@ static void print_install_plan(const install_plan_t *plan)
 	scr_printf("    title:     %s\n", plan->volume_id);
 	scr_printf("    fmt args:  disc=0x%02x layer1=%u\n",
 	           plan->disc_type, (unsigned)plan->layer1_start);
+	if (plan->iso_size_mb > 4500 && plan->layer1_start == 0)
+		scr_printf("    WARNING: DVD9-sized; no .layer_break sidecar\n");
 	if (plan->subs_needed > 0) {
 		scr_printf("    sub parts: %d (%u MB total)\n",
 		           plan->subs_needed, (unsigned)plan->subs_total_size_mb);
