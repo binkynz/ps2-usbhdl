@@ -22,38 +22,26 @@ static int wet_run_authorized(void)
 	return 1;
 }
 
-static void maybe_install(const install_plan_t *plan, const char *iso_path)
+/* Run the create + format + stream sequence for one planned ISO.
+ * Returns 0 on success, -1 on any failure. */
+static int install_one(const install_plan_t *plan, const char *iso_path)
 {
-	if (!plan->valid) return;
-
-	if (!wet_run_authorized()) {
-		scr_printf("  (touch mass:/INSTALL_NOW to enable wet run)\n");
-		return;
-	}
-
 	int exists = partition_exists(plan->partition_name);
 	if (exists < 0) {
 		scr_printf("  ABORT: cannot enumerate hdd0:\n");
-		return;
+		return -1;
 	}
-
-	if (exists > 0)
-		scr_printf("\n  %s exists; will remove + reinstall.\n",
-		           plan->partition_name);
-
-	scr_printf("  WET RUN in 10s. POWER OFF NOW to abort.\n");
-	delay_ms(10000);
-
-	/* Past the abort window — destructive ops can run. */
 	if (exists > 0) {
+		scr_printf("  %s exists; removing for clean reinstall\n",
+		           plan->partition_name);
 		int rret = partition_remove(plan->partition_name);
 		if (rret < 0) {
-			scr_printf("  remove failed: %d, aborting\n", rret);
-			return;
+			scr_printf("  remove failed: %d\n", rret);
+			return -1;
 		}
 	}
-	if (execute_install(plan) < 0) return;
-	stream_iso_to_partition(plan, iso_path);
+	if (execute_install(plan) < 0) return -1;
+	return stream_iso_to_partition(plan, iso_path);
 }
 
 static void plan_install_from_usb(void)
@@ -92,17 +80,45 @@ static void plan_install_from_usb(void)
 		return;
 	}
 
-	int sel = pick_iso(isos, iso_count);
-	if (sel < 0) {
+	static int selected[MAX_ISOS];
+	int n_selected = pick_isos(isos, iso_count, selected);
+	if (n_selected == 0) {
 		scr_printf("  aborted by user\n");
 		return;
 	}
-	scr_printf("  ISO: %s\n", isos[sel]);
+	scr_printf("  selected %d ISO(s)\n", n_selected);
 
-	install_plan_t plan;
-	compute_install_plan(isos[sel], &plan);
-	print_install_plan(&plan);
-	maybe_install(&plan, isos[sel]);
+	/* Compute and print plans for everything we'd install. */
+	static install_plan_t plans[MAX_ISOS];
+	int i;
+	for (i = 0; i < iso_count; i++) {
+		if (!selected[i]) continue;
+		scr_printf("\n  -- %s --\n", isos[i]);
+		compute_install_plan(isos[i], &plans[i]);
+		print_install_plan(&plans[i]);
+	}
+
+	if (!wet_run_authorized()) {
+		scr_printf("\n  (touch mass:/INSTALL_NOW to enable wet run)\n");
+		return;
+	}
+
+	scr_printf("\n  WET RUN (%d ISO%s) in 10s. POWER OFF NOW to abort.\n",
+	           n_selected, n_selected == 1 ? "" : "s");
+	delay_ms(10000);
+
+	int ok = 0, failed = 0;
+	int batch_idx = 0;
+	for (i = 0; i < iso_count; i++) {
+		if (!selected[i]) continue;
+		batch_idx++;
+		scr_printf("\n  === %d/%d: %s ===\n",
+		           batch_idx, n_selected, isos[i]);
+		if (install_one(&plans[i], isos[i]) == 0) ok++;
+		else failed++;
+	}
+
+	scr_printf("\n  batch done: %d ok, %d failed\n", ok, failed);
 }
 
 int main(int argc, char *argv[])

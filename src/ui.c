@@ -33,13 +33,21 @@ static int pad_init_port0(void)
 	return 0;
 }
 
-int pick_iso(char isos[MAX_ISOS][280], int count)
+int pick_isos(char isos[MAX_ISOS][280], int count, int selected[MAX_ISOS])
 {
-	if (count <= 1) return count == 1 ? 0 : -1;
+	int i;
+	for (i = 0; i < count; i++) selected[i] = 0;
+
+	if (count == 0) return 0;
+	if (count == 1) {
+		selected[0] = 1;
+		return 1;
+	}
 
 	if (!pad_init_port0()) {
-		scr_printf("  no pad - using %s\n", isos[0]);
-		return 0;
+		scr_printf("  no pad - selecting first only: %s\n", isos[0]);
+		selected[0] = 1;
+		return 1;
 	}
 
 	int idx = 0;
@@ -49,16 +57,17 @@ int pick_iso(char isos[MAX_ISOS][280], int count)
 
 	for (;;) {
 		if (dirty) {
-			int i;
 			for (i = 0; i < count; i++) {
 				scr_clearline(menu_y + i);
 				scr_setXY(0, menu_y + i);
-				scr_printf("    %c %s",
-				           i == idx ? '>' : ' ', isos[i]);
+				scr_printf("    %c [%c] %s",
+				           i == idx ? '>' : ' ',
+				           selected[i] ? '*' : ' ',
+				           isos[i]);
 			}
 			scr_clearline(menu_y + count);
 			scr_setXY(0, menu_y + count);
-			scr_printf("    [D-pad] move  [X] install  [/\\] abort");
+			scr_printf("    [D-pad]  [#] toggle  [X] start  [/\\] abort");
 			dirty = 0;
 		}
 
@@ -76,13 +85,28 @@ int pick_iso(char isos[MAX_ISOS][280], int count)
 				idx = (idx + 1) % count;
 				dirty = 1;
 			}
+			if (newly & PAD_SQUARE) {
+				selected[idx] = !selected[idx];
+				dirty = 1;
+			}
 			if (newly & PAD_CROSS) {
+				int n = 0;
+				for (i = 0; i < count; i++)
+					if (selected[i]) n++;
+				/* If user hit X without toggling anything,
+				 * treat the current row as the single
+				 * selection — covers the "I just want this
+				 * one" case without forcing a Square press. */
+				if (n == 0) {
+					selected[idx] = 1;
+					n = 1;
+				}
 				scr_setXY(0, menu_y + count + 1);
-				return idx;
+				return n;
 			}
 			if (newly & PAD_TRIANGLE) {
 				scr_setXY(0, menu_y + count + 1);
-				return -1;
+				return 0;
 			}
 		}
 		delay_ms(50);
