@@ -1,5 +1,8 @@
 # ps2-usbhdl
 
+[![build](https://github.com/binkynz/ps2-usbhdl/actions/workflows/build.yml/badge.svg)](https://github.com/binkynz/ps2-usbhdl/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/binkynz/ps2-usbhdl?include_prereleases&label=release)](https://github.com/binkynz/ps2-usbhdl/releases)
+
 A PlayStation 2 ELF that installs PS2 ISO games from a USB
 mass-storage device directly onto the internal HDD in HDLoader
 format — running entirely on the console, with no PC required.

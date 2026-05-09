@@ -1,0 +1,58 @@
+# Contributing
+
+ps2-usbhdl is small and the contribution scope is correspondingly
+small — bug reports against real hardware, fixes for things the
+[README's Limitations
+section](README.md#limitations-and-future-work) names, and
+incremental polish.
+
+## Setup
+
+You need:
+
+- A modded fat PS2 with an HDD (Sony Network Adapter or compatible)
+- A FAT32 USB stick with at least one PS2 ISO at the root
+- Linux on the build host
+- Docker (the build environment runs inside a `ps2dev/ps2dev`-based
+  image; nothing PS2-specific is installed on the host)
+- [`just`](https://github.com/casey/just) for the task runner
+
+## Build / test cycle
+
+```sh
+just all                          # ELF + test ISO into dist/
+just deploy /dev/sdX1             # stage onto USB (sudo prompt once)
+sudo umount /mnt/usb              # if your distro auto-mounted
+# unplug, plug into PS2, run via uLaunchELF
+```
+
+`dist/test.iso` is an 820 KB hello-world wrapper used to validate
+the install pipeline end-to-end without committing to a 67-minute
+real-DVD stream. Most iterations want this.
+
+For sub-partition (>4 GB ISO) testing without a DVD9 game, use
+the synthetic large-ISO recipe (`just test-iso-large`).
+
+## What to expect on real hardware
+
+The PS2's debug screen is 27 lines tall, no scroll — anything that
+overflows wraps to the top. The streaming UI clears the screen at
+the start of the install for this reason. If you add new output,
+keep that wrap behavior in mind.
+
+USB 1.1 throughput is ~1 MB/s. A 4 GB DVD takes ~67 minutes to
+stream. Test new code paths against `test.iso` first.
+
+## House style for commits
+
+Imperative subjects, body explains *why* not *what*, lines wrap
+around 72 columns. See `git log` for the existing pattern. Force
+pushes to `main` are fine on this project — there are no other
+contributors yet.
+
+## Hardware-validated changes
+
+PRs that touch the install/stream/HDD code paths should include a
+photo of the screen showing the relevant output on real hardware.
+PCSX2 doesn't reliably emulate USB mass storage, so the CI build
+only validates compilation, not behavior.
