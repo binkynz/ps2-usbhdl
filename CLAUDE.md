@@ -30,16 +30,33 @@ to the HDD. This tool fills that gap.
 
 No native PS2SDK on the dev machine — cross-compile via the
 [`ps2dev/ps2dev`](https://hub.docker.com/r/ps2dev/ps2dev) Docker
-image, which ships PS2SDK + EE/IOP toolchains. Image pull is large
-(~2 GB) but only needed once.
+image, which ships PS2SDK + EE/IOP toolchains. The project's
+`Dockerfile` layers in `make`, `bash`, GCC's gmp/mpfr/mpc deps,
+and `cdrkit` (for genisoimage) on top.
+
+Host-side task running goes through `just`. Recipes:
+
+- `just build` — compile installer ELF to `dist/ps2-usbhdl.elf`
+- `just test-iso` — build a tiny hello-world test ISO at
+  `dist/test.iso` for fast streaming-pipeline iteration
+- `just all` — both
+- `just deploy <USB-mount-dir>` — copy outputs + create
+  `INSTALL_NOW` sentinel onto a mounted USB stick
+- `just clean` — remove `build/` and `dist/`
+
+Inside the container, `make` (driven by the project `Makefile`)
+does the actual compilation.
 
 ## Test workflow
 
-1. Build ELF inside Docker.
-2. Copy ELF to a FAT32 USB stick.
-3. Run on the real PS2 via uLaunchELF (`mass:`).
-4. Read TTY output via the screen (early dev) or by writing to a log
-   file on the USB stick (later).
+1. `just all` — builds ELF + test ISO into `dist/`.
+2. `just deploy /run/media/$USER/<stick>` — stages everything
+   onto USB including the wet-run sentinel.
+3. Plug stick into PS2, run `ps2-usbhdl.elf` via uLaunchELF.
+
+For fast iteration on streaming/install code, use `dist/test.iso`
+(a ~820 KB hello-world wrapped in ISO9660). At USB 1.1 it streams
+in under a second; a real PS2 DVD ISO takes ~67 minutes.
 
 No emulator path — PCSX2's HDD/IRX behavior diverges enough from real
 hardware that bugs only surface on the console.

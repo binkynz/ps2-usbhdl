@@ -1,4 +1,4 @@
-EE_BIN = ps2-usbhdl.elf
+EE_BIN = dist/ps2-usbhdl.elf
 
 EE_SRC_DIR   = src
 EE_BUILD_DIR = build
