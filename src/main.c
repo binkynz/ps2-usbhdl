@@ -98,10 +98,8 @@ static void show_partition_table(void)
 	scr_printf("\n  PFS partitions: %d\n", n);
 	int i;
 	for (i = 0; i < n && i < 25; i++) {
-		scr_printf("    [%2d] %-20s %5lu MB  free=%5lu MB\n",
-		           i, fs[i].name,
-		           (unsigned long)fs[i].size,
-		           (unsigned long)fs[i].freeSpace);
+		scr_printf("    [%d] %-16s %lu MB\n",
+		           i, fs[i].name, (unsigned long)fs[i].size);
 	}
 }
 
@@ -111,7 +109,8 @@ int main(int argc, char *argv[])
 
 	init_scr();
 	scr_printf("\n  ps2-usbhdl: HDD partition reader\n");
-	scr_printf("  read-only — no writes will occur\n");
+	scr_printf("  read-only - no writes will occur\n");
+	scr_printf("  build: " __DATE__ " " __TIME__ "\n");
 
 	boot_iop_with_modules();
 	show_partition_table();
