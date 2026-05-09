@@ -452,15 +452,23 @@ static int partition_exists(const char *target)
 
 /* Actually create the APA partition with HDL type, then write the
  * HDL header via fileXioFormat. On format failure the half-created
- * partition is removed so the disk doesn't accumulate garbage. */
+ * partition is removed so the disk doesn't accumulate garbage.
+ *
+ * Note: every fileXio* path that names a partition needs the
+ * "hdd0:" device prefix. We store partition_name bare (so it
+ * matches what fileXioDread returns) and add the prefix on demand
+ * when calling iomanX-routed APIs. */
 static int execute_install(const install_plan_t *plan)
 {
-	char cmd[64];
-	snprintf(cmd, sizeof(cmd), "%s,,,%uM,HDL",
-	         plan->partition_name, (unsigned)plan->main_part_size_mb);
+	char hdd_path[64];      /* hdd0:<name> */
+	char create_cmd[80];    /* hdd0:<name>,,,SIZE,HDL */
+	snprintf(hdd_path,   sizeof(hdd_path),   "hdd0:%s",
+	         plan->partition_name);
+	snprintf(create_cmd, sizeof(create_cmd), "%s,,,%uM,HDL",
+	         hdd_path, (unsigned)plan->main_part_size_mb);
 
-	scr_printf("  fileXioOpen: %s\n", cmd);
-	int fd = fileXioOpen(cmd, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	scr_printf("  fileXioOpen: %s\n", create_cmd);
+	int fd = fileXioOpen(create_cmd, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0) {
 		scr_printf("  open failed: %d\n", fd);
 		return -1;
@@ -477,12 +485,12 @@ static int execute_install(const install_plan_t *plan)
 	strncpy(args.StartupPath, plan->startup_id,
 	        sizeof(args.StartupPath) - 1);
 
-	scr_printf("  fileXioFormat: %s\n", plan->partition_name);
-	int ret = fileXioFormat("hdl0:", plan->partition_name,
+	scr_printf("  fileXioFormat: %s\n", hdd_path);
+	int ret = fileXioFormat("hdl0:", hdd_path,
 	                        (const char *)&args, sizeof(args));
 	if (ret < 0) {
 		scr_printf("  format failed: %d (removing partition)\n", ret);
-		fileXioRemove(plan->partition_name);
+		fileXioRemove(hdd_path);
 		return -1;
 	}
 
