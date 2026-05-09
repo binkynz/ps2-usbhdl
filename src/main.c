@@ -144,29 +144,141 @@ static int ends_with_iso(const char *name)
 typedef struct {
 	int valid;
 	char volume_id[33];          /* from ISO9660 PVD */
+	char startup_id[16];         /* from SYSTEM.CNF, e.g. "SCES_503.62" */
 	uint32_t iso_size_mb;
-	char partition_name[33];     /* APA partition name, e.g. PP.HDL.RATCHET */
+	char partition_name[33];     /* APA partition name, e.g. PP.HDL.SCES_503.62 */
 	uint32_t main_part_size_mb;
 	int subs_needed;             /* >0 only for ISOs > ~16 GB */
 	uint32_t subs_total_size_mb;
 } install_plan_t;
+
+typedef struct {
+	uint32_t lba;
+	uint32_t size;
+} iso_extent_t;
 
 static uint32_t round_up_to(uint32_t v, uint32_t grain)
 {
 	return ((v + grain - 1) / grain) * grain;
 }
 
-/* Keep [A-Z0-9_]; uppercase a-z; drop everything else. Truncate. */
+/* Keep [A-Z0-9_.]; uppercase a-z; drop everything else. Truncate.
+ * Dots are allowed because canonical PS2 startup ids contain them
+ * (e.g. SCES_503.62) and APA partition names accept dots. */
 static void sanitize_for_partname(const char *src, char *dst, int dstsz)
 {
 	int i = 0, j = 0;
 	while (src[i] && j < dstsz - 1) {
 		char c = src[i++];
 		if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
-		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
+		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+		    c == '_' || c == '.')
 			dst[j++] = c;
 	}
 	dst[j] = 0;
+}
+
+/* Read sectors from an open ISO. PS2 lseek is 32-bit, but the
+ * metadata we need (root dir, SYSTEM.CNF) lives at low LBAs so this
+ * is fine here. */
+static int read_sector(int fd, uint32_t lba, void *buf)
+{
+	off_t want = (off_t)lba * 2048;
+	if (lseek(fd, want, SEEK_SET) != want) return -1;
+	if (read(fd, buf, 2048) != 2048) return -1;
+	return 0;
+}
+
+/* Walk an ISO9660 directory looking for an entry whose name matches
+ * `target` (case-sensitive; ISO9660 names are uppercase by convention).
+ * Returns 1 if found and writes the entry's extent to `out`, 0 if
+ * not found, -1 on read error. */
+static int find_in_dir(int fd, iso_extent_t dir, const char *target,
+                       iso_extent_t *out)
+{
+	int target_len = strlen(target);
+	uint32_t bytes_left = dir.size;
+	uint32_t lba = dir.lba;
+	static unsigned char sector[2048];
+
+	while (bytes_left > 0) {
+		if (read_sector(fd, lba, sector) < 0) return -1;
+
+		uint32_t off = 0;
+		uint32_t this_chunk = bytes_left < 2048 ? bytes_left : 2048;
+		while (off < this_chunk) {
+			uint8_t rec_len = sector[off];
+			if (rec_len == 0) break; /* zero-pad to end of sector */
+
+			uint32_t extent_lba =
+				sector[off + 2] | (sector[off + 3] << 8) |
+				(sector[off + 4] << 16) | (sector[off + 5] << 24);
+			uint32_t data_len =
+				sector[off + 10] | (sector[off + 11] << 8) |
+				(sector[off + 12] << 16) | (sector[off + 13] << 24);
+			uint8_t name_len = sector[off + 32];
+			const char *name = (const char *)&sector[off + 33];
+
+			/* Match `target` exactly OR with ISO9660's ;version
+			 * suffix (e.g. SYSTEM.CNF;1). */
+			if (name_len >= target_len &&
+			    memcmp(name, target, target_len) == 0 &&
+			    (name_len == target_len || name[target_len] == ';')) {
+				out->lba = extent_lba;
+				out->size = data_len;
+				return 1;
+			}
+			off += rec_len;
+		}
+
+		if (bytes_left <= 2048) break;
+		bytes_left -= 2048;
+		lba++;
+	}
+	return 0;
+}
+
+/* Pull the startup id (e.g. "SCES_503.62") from a PS2 ISO's
+ * SYSTEM.CNF. The file is text:
+ *   BOOT2 = cdrom0:\SCES_503.62;1
+ *   VER = 1.00
+ *   VMODE = NTSC
+ * We extract the bit between "cdrom0:\" and ";". Returns 0 on
+ * success, -1 on any failure (file not found, parse failure, etc.). */
+static int extract_startup_id(int fd, const unsigned char *pvd,
+                              char *out, int out_sz)
+{
+	/* Root directory record sits at PVD offset 156, 34 bytes. */
+	iso_extent_t root;
+	root.lba  = pvd[156 + 2] | (pvd[156 + 3] << 8) |
+	            (pvd[156 + 4] << 16) | (pvd[156 + 5] << 24);
+	root.size = pvd[156 + 10] | (pvd[156 + 11] << 8) |
+	            (pvd[156 + 12] << 16) | (pvd[156 + 13] << 24);
+
+	iso_extent_t syscnf;
+	if (find_in_dir(fd, root, "SYSTEM.CNF", &syscnf) != 1)
+		return -1;
+
+	/* SYSTEM.CNF is tiny — clamp at one sector. */
+	if (syscnf.size > 2048) syscnf.size = 2048;
+	static char buf[2049];
+	if (read_sector(fd, syscnf.lba, buf) < 0) return -1;
+	buf[syscnf.size] = 0;
+
+	const char *p = strstr(buf, "BOOT2");
+	if (!p) return -1;
+	p += 5;
+	while (*p == ' ' || *p == '\t' || *p == '=') p++;
+	if (strncmp(p, "cdrom0:\\", 8) == 0 ||
+	    strncmp(p, "cdrom0:/", 8) == 0)
+		p += 8;
+
+	int n = 0;
+	while (*p && *p != ';' && *p != '\r' && *p != '\n' &&
+	       *p != ' ' && *p != '\t' && n < out_sz - 1)
+		out[n++] = *p++;
+	out[n] = 0;
+	return n > 0 ? 0 : -1;
 }
 
 static int compute_install_plan(const char *iso_path, install_plan_t *plan)
@@ -177,15 +289,15 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 	if (fd < 0) return -1;
 
 	static unsigned char pvd[2048];
-	if (lseek(fd, 16 * 2048, SEEK_SET) != 16 * 2048 ||
-	    read(fd, pvd, 2048) != 2048) {
+	if (read_sector(fd, 16, pvd) < 0) {
 		close(fd);
 		return -1;
 	}
-	close(fd);
 
-	if (pvd[0] != 0x01 || memcmp(&pvd[1], "CD001", 5) != 0)
+	if (pvd[0] != 0x01 || memcmp(&pvd[1], "CD001", 5) != 0) {
+		close(fd);
 		return -1;
+	}
 
 	/* Volume identifier (32 bytes at PVD offset 40), trim trailing spaces. */
 	memcpy(plan->volume_id, &pvd[40], 32);
@@ -200,10 +312,21 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 	uint32_t bsz = pvd[128] | (pvd[129] << 8);
 	plan->iso_size_mb = (uint32_t)((blocks * (uint64_t)bsz) >> 20);
 
-	/* Partition name = "PP.HDL." + sanitized volume id, capped. APA
-	 * limit is 32 chars; "PP.HDL." is 7, leaving 25 for the suffix. */
+	/* Best-effort startup id from SYSTEM.CNF. If it fails we still
+	 * have a usable plan, just with a less-canonical partition name. */
+	(void)extract_startup_id(fd, pvd, plan->startup_id,
+	                         sizeof(plan->startup_id));
+
+	close(fd);
+
+	/* Partition name = "PP.HDL." + canonical startup id, falling back
+	 * to sanitized volume id. APA name limit is 32; "PP.HDL." is 7,
+	 * leaving 25 for the suffix. */
 	char san[33];
-	sanitize_for_partname(plan->volume_id, san, sizeof(san));
+	const char *suffix = plan->startup_id[0]
+	                     ? plan->startup_id
+	                     : plan->volume_id;
+	sanitize_for_partname(suffix, san, sizeof(san));
 	snprintf(plan->partition_name, sizeof(plan->partition_name),
 	         "PP.HDL.%.24s", san);
 
@@ -250,6 +373,8 @@ static void print_install_plan(const install_plan_t *plan)
 	scr_printf("\n  install plan (DRY RUN):\n");
 	scr_printf("    volume:    %s (%u MB)\n",
 	           plan->volume_id, (unsigned)plan->iso_size_mb);
+	scr_printf("    startup:   %s\n",
+	           plan->startup_id[0] ? plan->startup_id : "(SYSTEM.CNF parse failed)");
 	scr_printf("    partname:  %s\n", plan->partition_name);
 	scr_printf("    main part: %u MB\n", (unsigned)plan->main_part_size_mb);
 	if (plan->subs_needed > 0)
