@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v0.1.0-alpha)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch we check out the named tag; for the
+          # tag-push trigger, the default ref is the tag itself.
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Docker image
+        run: docker build -q -t ps2-usbhdl-build:latest .
+
+      - name: Build installer ELF
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -u "$(id -u):$(id -g)" \
+            ps2-usbhdl-build:latest \
+            make
+
+      - name: Build test ISO
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -u "$(id -u):$(id -g)" \
+            ps2-usbhdl-build:latest \
+            sh /src/test/build-iso.sh
+
+      - name: Compute SHA256SUMS
+        run: |
+          cd dist
+          sha256sum ps2-usbhdl.elf test.iso > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          files: |
+            dist/ps2-usbhdl.elf
+            dist/test.iso
+            dist/SHA256SUMS

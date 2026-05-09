@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -q -t ps2-usbhdl-build:latest .
+
+      - name: Build installer ELF
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -u "$(id -u):$(id -g)" \
+            ps2-usbhdl-build:latest \
+            make
+
+      - name: Build test ISO
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -u "$(id -u):$(id -g)" \
+            ps2-usbhdl-build:latest \
+            sh /src/test/build-iso.sh
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps2-usbhdl-${{ github.sha }}
+          path: |
+            dist/ps2-usbhdl.elf
+            dist/test.iso
+          retention-days: 14
