@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <kernel.h>
+#include <delaythread.h>
 #include <debug.h>
 #include <sifrpc.h>
 #include <loadfile.h>
@@ -61,13 +62,10 @@ static int load_irx(const char *label, void *data, unsigned int size,
 	return 0;
 }
 
-/* Spin for ~ms milliseconds. The USB stack needs a moment after the
- * IRX modules are loaded for device enumeration to complete. */
-static void busy_delay_ms(int ms)
+/* Real kernel-backed delay. DelayThread takes microseconds. */
+static void delay_ms(int ms)
 {
-	volatile int i;
-	int reps = ms * 20000;
-	for (i = 0; i < reps; i++) { /* nop */ }
+	DelayThread(ms * 1000);
 }
 
 static void boot_iop_with_modules(void)
@@ -422,6 +420,101 @@ static void print_install_plan(const install_plan_t *plan)
 	scr_printf("  no writes performed.\n");
 }
 
+/* Wet-run gate: returns 1 only if mass:/INSTALL_NOW exists. The
+ * sentinel-file approach makes accidental writes impossible — user
+ * has to deliberately drop the file on the USB stick. */
+static int wet_run_authorized(void)
+{
+	int fd = open("mass:/INSTALL_NOW", O_RDONLY);
+	if (fd < 0) return 0;
+	close(fd);
+	return 1;
+}
+
+/* Walk hdd0:'s partition list looking for an exact name match.
+ * Returns 1 if found, 0 if not, -1 on enumeration failure. */
+static int partition_exists(const char *target)
+{
+	int dd = fileXioDopen("hdd0:");
+	if (dd < 0) return -1;
+
+	iox_dirent_t de;
+	int found = 0;
+	while (fileXioDread(dd, &de) > 0) {
+		if (strcmp(de.name, target) == 0) {
+			found = 1;
+			break;
+		}
+	}
+	fileXioDclose(dd);
+	return found;
+}
+
+/* Actually create the APA partition with HDL type, then write the
+ * HDL header via fileXioFormat. On format failure the half-created
+ * partition is removed so the disk doesn't accumulate garbage. */
+static int execute_install(const install_plan_t *plan)
+{
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "%s,,,%uM,HDL",
+	         plan->partition_name, (unsigned)plan->main_part_size_mb);
+
+	scr_printf("  fileXioOpen: %s\n", cmd);
+	int fd = fileXioOpen(cmd, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		scr_printf("  open failed: %d\n", fd);
+		return -1;
+	}
+	fileXioClose(fd);
+
+	struct HDLFS_FormatArgs args;
+	memset(&args, 0, sizeof(args));
+	args.DiscType    = plan->disc_type;
+	args.NumSectors  = plan->iso_sectors_2k;
+	args.Layer1Start = plan->layer1_start;
+	strncpy(args.GameTitle,   plan->volume_id,
+	        sizeof(args.GameTitle) - 1);
+	strncpy(args.StartupPath, plan->startup_id,
+	        sizeof(args.StartupPath) - 1);
+
+	scr_printf("  fileXioFormat: %s\n", plan->partition_name);
+	int ret = fileXioFormat("hdl0:", plan->partition_name,
+	                        (const char *)&args, sizeof(args));
+	if (ret < 0) {
+		scr_printf("  format failed: %d (removing partition)\n", ret);
+		fileXioRemove(plan->partition_name);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void maybe_install(const install_plan_t *plan)
+{
+	if (!plan->valid) return;
+
+	if (!wet_run_authorized()) {
+		scr_printf("  (touch mass:/INSTALL_NOW to enable wet run)\n");
+		return;
+	}
+
+	int exists = partition_exists(plan->partition_name);
+	if (exists < 0) {
+		scr_printf("  ABORT: cannot enumerate hdd0:\n");
+		return;
+	}
+	if (exists > 0) {
+		scr_printf("  ABORT: %s already exists\n", plan->partition_name);
+		return;
+	}
+
+	scr_printf("\n  WET RUN in 10s. POWER OFF NOW to abort.\n");
+	delay_ms(10000);
+
+	if (execute_install(plan) == 0)
+		scr_printf("  partition + header ok. next: stream ISO data.\n");
+}
+
 static void plan_install_from_usb(void)
 {
 	scr_printf("\n  waiting for USB...\n");
@@ -431,7 +524,7 @@ static void plan_install_from_usb(void)
 	for (tries = 0; tries < 30; tries++) {
 		d = opendir("mass:/");
 		if (d) break;
-		busy_delay_ms(100);
+		delay_ms(100);
 	}
 	if (!d) {
 		scr_printf("  no usb mount after 3s\n");
@@ -460,6 +553,7 @@ static void plan_install_from_usb(void)
 	install_plan_t plan;
 	compute_install_plan(first_iso, &plan);
 	print_install_plan(&plan);
+	maybe_install(&plan);
 }
 
 int main(int argc, char *argv[])
