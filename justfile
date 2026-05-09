@@ -1,9 +1,8 @@
-# Default: list available recipes.
+# List available recipes.
 default:
     @just --list
 
-# Build the installer ELF into dist/. Forwards extra args to make,
-# e.g. `just build clean` to clean inside the container.
+# Compile installer ELF -> dist/ps2-usbhdl.elf (forwards args to make).
 build *ARGS:
     @docker build -q -t ps2-usbhdl-build:latest . >/dev/null
     docker run --rm \
@@ -12,9 +11,7 @@ build *ARGS:
         ps2-usbhdl-build:latest \
         make {{ARGS}}
 
-# Build a tiny test ISO for fast install-pipeline iteration. Output:
-# dist/test.iso (~820 KB; streams over USB 1.1 in under a second
-# vs. ~67 minutes for a real DVD ISO).
+# Build a tiny dist/test.iso (~820 KB) for fast install-pipeline iteration.
 test-iso:
     @docker build -q -t ps2-usbhdl-build:latest . >/dev/null
     @mkdir -p dist
@@ -28,15 +25,48 @@ test-iso:
 # Build both the installer ELF and the test ISO.
 all: build test-iso
 
-# Copy build outputs + INSTALL_NOW sentinel onto a mounted USB stick.
-# Usage: `just deploy /run/media/$USER/<stick>`
-deploy DIR:
-    @test -d "{{DIR}}" || { echo "not a directory: {{DIR}}" >&2; exit 1; }
-    cp -v dist/ps2-usbhdl.elf "{{DIR}}/"
-    @[ -f dist/test.iso ] && cp -v dist/test.iso "{{DIR}}/" || true
-    touch "{{DIR}}/INSTALL_NOW"
+# Stage outputs + INSTALL_NOW onto a USB (block device or mounted dir).
+deploy TARGET:
+    #!/bin/sh
+    # TARGET can be either:
+    #   - a block device (/dev/sdX[N]) — sudo-mounts to a tempdir,
+    #     copies, syncs, unmounts.
+    #   - a directory that's already mounted — copies into it (with
+    #     sudo, since system mount points are typically root-owned).
+    set -eu
+
+    we_mounted=0
+    if [ -b "{{TARGET}}" ]; then
+        mp=$(findmnt -nro TARGET "{{TARGET}}" 2>/dev/null || true)
+        if [ -z "$mp" ]; then
+            mp=$(mktemp -d)
+            sudo mount "{{TARGET}}" "$mp"
+            we_mounted=1
+        fi
+    elif [ -d "{{TARGET}}" ]; then
+        mp="{{TARGET}}"
+    else
+        echo "not a block device or directory: {{TARGET}}" >&2
+        exit 1
+    fi
+
+    echo "Staging to $mp (sudo)..."
+    sudo cp -v dist/ps2-usbhdl.elf "$mp/"
+    [ -f dist/test.iso ] && sudo cp -v dist/test.iso "$mp/" || :
+    sudo touch "$mp/INSTALL_NOW"
     sync
-    @echo "ready - unmount the stick and plug into the PS2."
+
+    if [ "$we_mounted" = "1" ]; then
+        sudo umount "{{TARGET}}"
+        rmdir "$mp" 2>/dev/null || :
+        echo "ready - plug into the PS2."
+    else
+        echo "ready - unmount the stick and plug into the PS2."
+    fi
+
+# List candidate USB block devices for `just deploy`.
+usb-list:
+    @lsblk -p -o NAME,SIZE,TRAN,MOUNTPOINT,LABEL | awk 'NR==1 || $3=="usb"'
 
 # Remove host + container build artifacts.
 clean:
