@@ -574,40 +574,61 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 	char hdd_path[64];
 	snprintf(hdd_path, sizeof(hdd_path), "hdd0:%s", plan->partition_name);
 
-	scr_printf("\n  mounting hdl0:...\n");
+	uint64_t total = (uint64_t)plan->iso_sectors_2k * 2048;
+	unsigned total_mb = (unsigned)(total >> 20);
+
+	/* Clear the screen before streaming. The earlier output (banner,
+	 * module load summary, HDD info, USB enum, install plan, wet-run
+	 * countdown, fileXioOpen, fileXioFormat) fills 20+ lines of the
+	 * 27-line debug screen, leaving no clean room for the 2-line
+	 * progress bar; the cursor wraps to (0,0) and the bar overwrites
+	 * the banner while the visible bottom of the screen still says
+	 * "mounting hdl0:" — looks exactly like a hang. Resetting here
+	 * gives the streaming UI its own canvas. */
+	scr_clear();
+	scr_setXY(0, 0);
+	scr_printf("\n  installing  %s\n", plan->partition_name);
+	scr_printf("  source      %s\n", iso_path);
+	scr_printf("  size        %u MB (~%u min at USB 1.1)\n\n",
+	           total_mb, (total_mb + 59) / 60);
+
+	/* Per-step ok/FAIL prints so a real hang is locatable: whichever
+	 * line stops mid-print is the offending call. */
+	scr_printf("  fileXioMount    ");
 	int ret = fileXioMount("hdl0:", hdd_path, FIO_MT_RDWR);
 	if (ret < 0) {
-		scr_printf("  mount failed: %d\n", ret);
+		scr_printf("FAIL %d\n", ret);
 		return -1;
 	}
+	scr_printf("ok\n");
 
+	scr_printf("  fileXioOpen     ");
 	int hdl_fd = fileXioOpen("hdl0:", O_RDWR);
 	if (hdl_fd < 0) {
-		scr_printf("  hdl0: open failed: %d\n", hdl_fd);
+		scr_printf("FAIL %d\n", hdl_fd);
 		fileXioUmount("hdl0:");
 		return -1;
 	}
+	scr_printf("ok\n");
 
+	scr_printf("  open ISO        ");
 	int iso_fd = open(iso_path, O_RDONLY);
 	if (iso_fd < 0) {
-		scr_printf("  iso open failed: %d\n", iso_fd);
+		scr_printf("FAIL %d\n", iso_fd);
 		fileXioClose(hdl_fd);
 		fileXioUmount("hdl0:");
 		return -1;
 	}
+	scr_printf("ok\n\n");
 
 	/* 1 MB chunks: a sweet spot between USB-1.1 throughput
 	 * (≈1 MB/s) and not blowing too much of the 32 MB EE RAM. */
 	static uint8_t buf[1024 * 1024] __attribute__((aligned(64)));
 
-	uint64_t total = (uint64_t)plan->iso_sectors_2k * 2048;
-	unsigned total_mb = (unsigned)(total >> 20);
 	uint64_t written = 0;
 	int last_pct = -1;
+	time_t last_render = 0;
 	time_t start_t = time(NULL);
-
-	scr_printf("  streaming %u MB (USB 1.1 ≈ 1 MB/s, expect ~%u min)\n",
-	           total_mb, (total_mb + 59) / 60);
 	int progress_y = scr_getY();
 
 	while (written < total) {
@@ -629,8 +650,13 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 		written += wrote;
 
 		int pct = (int)((written * 100) / total);
-		if (pct != last_pct) {
-			time_t elapsed = time(NULL) - start_t;
+		time_t now = time(NULL);
+		/* Refresh on percent change OR once per wall-second. At USB
+		 * 1.1 each percent is ~40 sec for a 4 GB ISO; without the
+		 * time-based refresh the bar sits frozen between percents
+		 * and the user thinks it's hung. */
+		if (pct != last_pct || now != last_render) {
+			time_t elapsed = now - start_t;
 			unsigned eta = 0;
 			unsigned mbps10 = 0; /* MB/s × 10 (one decimal) */
 			if (elapsed > 0 && written > 0) {
@@ -657,6 +683,7 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 			           (unsigned)(elapsed % 60),
 			           eta / 60, eta % 60);
 			last_pct = pct;
+			last_render = now;
 		}
 	}
 
@@ -664,7 +691,7 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 	fileXioClose(hdl_fd);
 	fileXioUmount("hdl0:");
 
-	scr_setXY(0, progress_y + 2);
+	scr_setXY(0, progress_y + 3);
 	if (written == total) {
 		time_t elapsed = time(NULL) - start_t;
 		scr_printf("  install complete in %u:%02u — boot via OPL\n",
