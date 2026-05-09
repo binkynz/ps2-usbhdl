@@ -140,7 +140,7 @@ int pick_items(char items[][280], int count, int selected[]) {
       }
       scr_clearline(menu_y + count);
       scr_setXY(0, menu_y + count);
-      scr_printf("    [D-pad]  [#] toggle  [X] start  [/\\] abort");
+      scr_printf("    [D-pad]  [O] toggle  [X] start  [/\\] abort");
       dirty = 0;
     }
 
@@ -158,7 +158,7 @@ int pick_items(char items[][280], int count, int selected[]) {
         idx = (idx + 1) % count;
         dirty = 1;
       }
-      if (newly & PAD_SQUARE) {
+      if (newly & PAD_CIRCLE) {
         selected[idx] = !selected[idx];
         dirty = 1;
       }
