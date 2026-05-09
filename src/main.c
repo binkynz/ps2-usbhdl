@@ -24,15 +24,18 @@ extern unsigned char fileXio_irx[];       extern unsigned int size_fileXio_irx;
 extern unsigned char poweroff_irx[];      extern unsigned int size_poweroff_irx;
 extern unsigned char ps2dev9_irx[];       extern unsigned int size_ps2dev9_irx;
 extern unsigned char ps2atad_irx[];       extern unsigned int size_ps2atad_irx;
-extern unsigned char ps2hdd_irx[];        extern unsigned int size_ps2hdd_irx;
+extern unsigned char ps2hdd_hdl_irx[];    extern unsigned int size_ps2hdd_hdl_irx;
+extern unsigned char hdlfs_irx[];         extern unsigned int size_hdlfs_irx;
 extern unsigned char usbd_irx[];          extern unsigned int size_usbd_irx;
 extern unsigned char bdm_irx[];           extern unsigned int size_bdm_irx;
 extern unsigned char bdmfs_fatfs_irx[];   extern unsigned int size_bdmfs_fatfs_irx;
 extern unsigned char usbmass_bd_irx[];    extern unsigned int size_usbmass_bd_irx;
 
-/* ps2hdd.irx wants -o N -n N (max open files, max mounts) as a
- * null-separated argv blob with arg_len = sizeof(buffer). */
-static const char ps2hdd_args[] = "-o" "\0" "20" "\0" "-n" "\0" "20";
+/* ps2hdd-hdl.irx wants -o N -n N (max open files, max mounts) as a
+ * null-separated argv blob with arg_len = sizeof(buffer). The
+ * specific values match HDLGameInstaller's own loader so we stay on
+ * the path it tests. */
+static const char ps2hdd_args[] = "-o" "\0" "4" "\0" "-n" "\0" "128";
 
 static int load_irx(const char *label, void *data, unsigned int size,
                     int arg_len, const char *args)
@@ -77,8 +80,9 @@ static void boot_iop_with_modules(void)
 	poweroffInit();
 	load_irx("ps2dev9",     ps2dev9_irx,     size_ps2dev9_irx,     0, NULL);
 	load_irx("ps2atad",     ps2atad_irx,     size_ps2atad_irx,     0, NULL);
-	load_irx("ps2hdd",      ps2hdd_irx,      size_ps2hdd_irx,
+	load_irx("ps2hdd-hdl",  ps2hdd_hdl_irx,  size_ps2hdd_hdl_irx,
 	         sizeof(ps2hdd_args), ps2hdd_args);
+	load_irx("hdlfs",       hdlfs_irx,       size_hdlfs_irx,       0, NULL);
 	load_irx("usbd",        usbd_irx,        size_usbd_irx,        0, NULL);
 	load_irx("bdm",         bdm_irx,         size_bdm_irx,         0, NULL);
 	load_irx("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx, 0, NULL);

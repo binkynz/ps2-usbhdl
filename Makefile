@@ -8,8 +8,16 @@ EE_BUILD_DIR = build
 # until usbd/bdm/bdmfs is loaded — which themselves need to come
 # from somewhere; bundling them in the ELF avoids the bootstrap
 # problem entirely.
-IRX_NAMES = iomanX fileXio poweroff ps2dev9 ps2atad ps2hdd \
-            usbd bdm bdmfs_fatfs usbmass_bd
+# Standard PS2SDK-shipped IRXes.
+PS2SDK_IRX_NAMES = iomanX fileXio poweroff ps2dev9 ps2atad \
+                   usbd bdm bdmfs_fatfs usbmass_bd
+
+# IRXes from HDLGameInstaller, vendored under vendor/irx/.
+# We use ps2hdd_hdl.irx (the HDL-aware fork) instead of the standard
+# ps2hdd.irx, plus hdlfs.irx for the hdl0: device.
+VENDOR_IRX_NAMES = ps2hdd_hdl hdlfs
+
+IRX_NAMES = $(PS2SDK_IRX_NAMES) $(VENDOR_IRX_NAMES)
 IRX_OBJS  = $(addprefix $(EE_BUILD_DIR)/, $(addsuffix _irx.o, $(IRX_NAMES)))
 
 EE_OBJS = $(EE_BUILD_DIR)/main.o $(IRX_OBJS)
@@ -19,8 +27,14 @@ EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches
 all: $(EE_BIN)
 
 # bin2c turns a .irx into a C file with `unsigned char <name>[]`
-# and `unsigned int size_<name>` symbols.
+# and `unsigned int size_<name>` symbols. We have two source paths
+# (PS2SDK's installed IRX dir, and our vendored HDLGameInstaller
+# IRXes); make picks the one with an existing prerequisite.
 $(EE_BUILD_DIR)/%_irx.c: $(PS2SDK)/iop/irx/%.irx
+	@mkdir -p $(@D)
+	bin2c $< $@ $*_irx
+
+$(EE_BUILD_DIR)/%_irx.c: vendor/irx/%.irx
 	@mkdir -p $(@D)
 	bin2c $< $@ $*_irx
 

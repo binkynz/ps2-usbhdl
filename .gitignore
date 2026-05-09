@@ -2,7 +2,6 @@
 *.o
 *.a
 *.elf
-*.irx
 build/
 dist/
 
@@ -17,3 +16,7 @@ dist/
 # Local environment
 .env
 .env.local
+
+# Cloned third-party sources (binaries we use are committed under
+# vendor/irx/, but the upstream source trees are large and recloneable)
+vendor/src/
