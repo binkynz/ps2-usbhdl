@@ -22,6 +22,18 @@ test-iso:
         sh /src/test/build-iso.sh
     @ls -la dist/test.iso
 
+# Build a synthetic ~5 GB dist/test-large.iso to exercise the
+# sub-partition path (main 4G + 1 sub) without needing a DVD9 game.
+test-iso-large:
+    @docker build -q -t ps2-usbhdl-build:latest . >/dev/null
+    @mkdir -p dist
+    docker run --rm \
+        -v "$PWD:/src" -w /src \
+        -u "$(id -u):$(id -g)" \
+        ps2-usbhdl-build:latest \
+        sh /src/test/build-iso-large.sh
+    @ls -la dist/test-large.iso
+
 # Build both the installer ELF and the test ISO.
 all: build test-iso
 
