@@ -37,13 +37,19 @@ extern unsigned char usbmass_bd_irx[];    extern unsigned int size_usbmass_bd_ir
  * the path it tests. */
 static const char ps2hdd_args[] = "-o" "\0" "4" "\0" "-n" "\0" "128";
 
+/* Returns 0 on success, -1 on failure. Silent on success — caller
+ * prints a summary instead so module noise doesn't overflow the
+ * 27-line debug screen. */
 static int load_irx(const char *label, void *data, unsigned int size,
                     int arg_len, const char *args)
 {
 	int rv = -1;
 	int ret = SifExecModuleBuffer(data, size, arg_len, args, &rv);
-	scr_printf("  load %-12s ret=%d rv=%d\n", label, ret, rv);
-	return ret;
+	if (ret < 0 || rv != 0) {
+		scr_printf("  FAIL %s ret=%d rv=%d\n", label, ret, rv);
+		return -1;
+	}
+	return 0;
 }
 
 /* Spin for ~ms milliseconds. The USB stack needs a moment after the
@@ -72,21 +78,24 @@ static void boot_iop_with_modules(void)
 	sbv_patch_enable_lmb();
 	sbv_patch_disable_prefix_check();
 
-	scr_printf("\n  loading IOP modules:\n");
-	load_irx("iomanX",      iomanX_irx,      size_iomanX_irx,      0, NULL);
-	load_irx("fileXio",     fileXio_irx,     size_fileXio_irx,     0, NULL);
+	int fails = 0;
+	fails += load_irx("iomanX",      iomanX_irx,      size_iomanX_irx,      0, NULL) < 0;
+	fails += load_irx("fileXio",     fileXio_irx,     size_fileXio_irx,     0, NULL) < 0;
 	fileXioInit();
-	load_irx("poweroff",    poweroff_irx,    size_poweroff_irx,    0, NULL);
+	fails += load_irx("poweroff",    poweroff_irx,    size_poweroff_irx,    0, NULL) < 0;
 	poweroffInit();
-	load_irx("ps2dev9",     ps2dev9_irx,     size_ps2dev9_irx,     0, NULL);
-	load_irx("ps2atad",     ps2atad_irx,     size_ps2atad_irx,     0, NULL);
-	load_irx("ps2hdd-hdl",  ps2hdd_hdl_irx,  size_ps2hdd_hdl_irx,
-	         sizeof(ps2hdd_args), ps2hdd_args);
-	load_irx("hdlfs",       hdlfs_irx,       size_hdlfs_irx,       0, NULL);
-	load_irx("usbd",        usbd_irx,        size_usbd_irx,        0, NULL);
-	load_irx("bdm",         bdm_irx,         size_bdm_irx,         0, NULL);
-	load_irx("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx, 0, NULL);
-	load_irx("usbmass_bd",  usbmass_bd_irx,  size_usbmass_bd_irx,  0, NULL);
+	fails += load_irx("ps2dev9",     ps2dev9_irx,     size_ps2dev9_irx,     0, NULL) < 0;
+	fails += load_irx("ps2atad",     ps2atad_irx,     size_ps2atad_irx,     0, NULL) < 0;
+	fails += load_irx("ps2hdd-hdl",  ps2hdd_hdl_irx,  size_ps2hdd_hdl_irx,
+	                  sizeof(ps2hdd_args), ps2hdd_args) < 0;
+	fails += load_irx("hdlfs",       hdlfs_irx,       size_hdlfs_irx,       0, NULL) < 0;
+	fails += load_irx("usbd",        usbd_irx,        size_usbd_irx,        0, NULL) < 0;
+	fails += load_irx("bdm",         bdm_irx,         size_bdm_irx,         0, NULL) < 0;
+	fails += load_irx("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx, 0, NULL) < 0;
+	fails += load_irx("usbmass_bd",  usbmass_bd_irx,  size_usbmass_bd_irx,  0, NULL) < 0;
+
+	scr_printf("  IOP modules: %s\n",
+	           fails == 0 ? "all 11 ok" : "FAILURES above");
 }
 
 static void show_partition_table(void)
@@ -200,28 +209,26 @@ static void show_usb_iso(void)
 		return;
 	}
 
-	scr_printf("\n  USB contents (mass:/):\n");
+	/* Find first .iso silently — we don't need to print every file
+	 * on the stick, the user knows what's there. */
 	char first_iso[280] = {0};
 	struct dirent *de;
-	int count = 0;
+	int total = 0;
 	while ((de = readdir(d)) != NULL) {
-		if (count < 12)
-			scr_printf("    %s\n", de->d_name);
-		else if (count == 12)
-			scr_printf("    ... (more)\n");
+		total++;
 		if (!first_iso[0] && ends_with_iso(de->d_name))
 			snprintf(first_iso, sizeof(first_iso),
 			         "mass:/%s", de->d_name);
-		count++;
 	}
 	closedir(d);
+	scr_printf("\n  USB: %d entries at mass:/\n", total);
 
 	if (!first_iso[0]) {
-		scr_printf("\n  no .iso file found at mass:/\n");
+		scr_printf("  no .iso file found\n");
 		return;
 	}
 
-	scr_printf("\n  reading PVD from %s\n", first_iso);
+	scr_printf("  ISO: %s\n", first_iso);
 	parse_iso_pvd(first_iso);
 }
 
