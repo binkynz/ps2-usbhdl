@@ -8,7 +8,8 @@ EE_BUILD_DIR = build
 # until usbd/bdm/bdmfs is loaded — which themselves need to come
 # from somewhere; bundling them in the ELF avoids the bootstrap
 # problem entirely.
-IRX_NAMES = iomanX fileXio poweroff ps2dev9 ps2atad ps2hdd
+IRX_NAMES = iomanX fileXio poweroff ps2dev9 ps2atad ps2hdd \
+            usbd bdm bdmfs_fatfs usbmass_bd
 IRX_OBJS  = $(addprefix $(EE_BUILD_DIR)/, $(addsuffix _irx.o, $(IRX_NAMES)))
 
 EE_OBJS = $(EE_BUILD_DIR)/main.o $(IRX_OBJS)
