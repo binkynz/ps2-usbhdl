@@ -89,6 +89,11 @@ static void plan_install_from_usb(void) {
     print_install_plan(&plans[i]);
   }
 
+  /* Clear so the WET RUN prompt is unmissable — without this it
+   * lands at the bottom of a screen full of plan output and gets
+   * wrapped past row 27 by the debug-screen framebuffer. */
+  scr_clear();
+  scr_setXY(0, 0);
   scr_printf("\n  WET RUN (%d ISO%s) in 10s. POWER OFF NOW to abort.\n",
              n_selected, n_selected == 1 ? "" : "s");
   delay_ms(10000);
@@ -140,6 +145,10 @@ static void manage_hdl_partitions(void) {
     return;
   }
 
+  /* Same clear-before-warning rationale as the install flow: with
+   * many partitions listed the warning would fall off the screen. */
+  scr_clear();
+  scr_setXY(0, 0);
   scr_printf("\n  DELETE %d partition%s in 10s. POWER OFF to abort.\n", n_sel,
              n_sel == 1 ? "" : "s");
   delay_ms(10000);
