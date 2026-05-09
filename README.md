@@ -23,30 +23,37 @@ games onto the internal HDD. `ps2-usbhdl` fills that gap.
 
 ## Status
 
-**Alpha (v0.1.0-alpha).** End-to-end install + boot validated on
-real hardware (fat PS2 + Gamestar HDD adapter), against both a
-hand-built test ISO and a real game — Ratchet & Clank
-(`SCUS_971.99`, NTSC-US, ~4 GB single-layer DVD). The full
-pipeline (USB read → ISO9660 / SYSTEM.CNF parse → APA partition
-create + HDL header format → ~67 min stream → OPL launch into
-title screen) is confirmed working.
+**Alpha.** End-to-end install + boot validated on real hardware
+(fat PS2 + Gamestar HDD adapter), against both a hand-built test
+ISO and a real game — Ratchet & Clank (`SCUS_971.99`, NTSC-US,
+~4 GB single-layer DVD). The full pipeline (USB read →
+ISO9660 / SYSTEM.CNF parse → APA partition create + HDL header
+format → ~67 min stream → OPL launch into title screen) is
+confirmed working.
 
 What works:
 
 - Loads the standard IOP module stack plus HDLGameInstaller's
   HDL-aware IRXes (`ps2hdd-hdl.irx`, `hdlfs.irx`).
-- Reads PS2 ISOs from FAT32 USB sticks.
+- Reads PS2 ISOs from FAT32 USB sticks, including split-file
+  sets (`<name>.iso.001` / `.002` / ...) for ISOs above the
+  FAT32 4 GB single-file limit.
 - Parses ISO9660 PVD (volume id, size) and walks the disc to
   extract the canonical startup id from `SYSTEM.CNF`.
 - Plans the install: APA partition name (`PP.HDL.<startup>`),
-  bucket size, and HDL `FormatArgs`.
-- Wet run gated by a controller-driven mode picker, multi-select
-  picker, and a 10-second abort countdown.
-- Creates and formats an HDL partition via `fileXioOpen` /
-  `fileXioFormat`, with overwrite-on-conflict.
-- Streams the ISO from USB to the partition via `hdl0:` with a
-  visual progress bar, throughput, elapsed time, and ETA.
-- D-pad ISO picker if multiple `.iso` files are on the stick.
+  main + sub bucket sizing, and HDL `FormatArgs`.
+- Controller-driven UI: top-level mode picker (install / manage
+  / exit), D-pad navigable multi-select for ISOs and partitions,
+  10-second abort countdown before any destructive op.
+- Install mode: creates and formats an HDL partition with
+  overwrite-on-conflict, chains sub-partitions for >4 GB games,
+  streams the ISO with a visual progress bar (throughput,
+  elapsed, ETA).
+- Manage mode: lists existing HDL partitions on the HDD with
+  sizes; multi-select + delete with the same 10-second abort
+  window.
+- Batch install: pick N ISOs in one run; per-game success /
+  failure summary at the end.
 
 ## Hardware target
 
