@@ -165,16 +165,21 @@ The path that's been validated covers single-layer DVDs up to
 ~4 GB on a single APA partition. Beyond that, several things are
 known-incomplete:
 
-- **Sub-partitions for >4 GB games.** The sizing logic in
-  `compute_install_plan` already counts subs, but
-  `execute_install` only creates the main partition; the
-  `HDDIO_ADD_SUB` ioctl call is missing. DVD9 games (>4.7 GB)
-  won't install correctly until this lands.
-- **DVD9 layer-break detection.** `Layer1Start` is hardcoded to
-  0. For dual-layer discs this needs to be set to the
-  layer-break offset; detecting it from a bare ISO file is
-  non-trivial (typically the user supplies it or we read a
-  sidecar).
+- **Sub-partitions for >4 GB games.** Implemented but
+  unverified on real hardware — the only large ISO this session
+  exercised was 4 GB (single-partition path). `execute_install`
+  chains `HIOCADDSUB` ioctls for each planned sub before format.
+  Exercising the multi-partition path needs a DVD9 / >4 GB ISO
+  and a real install run.
+- **DVD9 layer-break detection.** No automatic detection from
+  the ISO file (the layer break lives in physical-layer
+  descriptors most rip tools strip). Sidecar override accepted:
+  `mass:/<iso>.iso.layer_break` containing the layer-1 start
+  sector as a decimal integer. ISOs over 4.5 GB without the
+  sidecar trigger a `WARNING` line in the install plan; install
+  still proceeds with `Layer1Start = 0`, which works for
+  single-layer discs misidentified by size and breaks for true
+  DVD9.
 - **Non-FAT32 USB.** `bdmfs_fatfs` is the only filesystem driver
   embedded; exFAT/NTFS sticks won't enumerate.
 - **Batch install.** Currently one ISO per run. Multi-ISO mode
