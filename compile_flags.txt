@@ -1,0 +1,4 @@
+-D_EE
+-DNEWLIB_PORT_AWARE
+-I.ps2sdk/ee/include
+-I.ps2sdk/common/include
