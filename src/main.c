@@ -20,6 +20,7 @@
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 #include <io_common.h>
+#include <hdd-ioctl.h>
 #include <libhdd.h>
 #include <libpad.h>
 
@@ -227,6 +228,13 @@ struct HDLFS_FormatArgs {
 	char     StartupPath[HDLFS_STARTUP_PTH_LEN];
 };
 
+/* Each game gets one main APA partition plus up to MAX_SUBS extension
+ * partitions for ISOs that don't fit in 4 GB (the per-partition cap
+ * imposed by HDLFS's 32-bit slice size). PS2 discs top out around
+ * 8.5 GB (DVD9), which fits in main + 2 subs at the 4 GB bucket; 8
+ * is a comfortable cap. */
+#define MAX_SUBS 8
+
 /* Plan the HDL partition layout for an ISO. Pure computation — no
  * disk side-effects, suitable for dry-run display. */
 typedef struct {
@@ -240,6 +248,7 @@ typedef struct {
 	const char *main_size_str;   /* APA bucket label, e.g. "4G" */
 	int subs_needed;             /* >0 only for ISOs > ~4 GB */
 	uint32_t subs_total_size_mb;
+	const char *sub_size_strs[MAX_SUBS]; /* bucket label per sub */
 	uint8_t  disc_type;          /* HDLFS DiscType: 0x12 CD / 0x14 DVD */
 	uint32_t layer1_start;       /* 0 unless DVD9 */
 } install_plan_t;
@@ -446,11 +455,12 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 		uint32_t remaining = plan->iso_size_mb - main_data;
 		plan->subs_needed        = 0;
 		plan->subs_total_size_mb = 0;
-		while (remaining > 0) {
+		while (remaining > 0 && plan->subs_needed < MAX_SUBS) {
 			int bk = pick_bucket(remaining + HDL_SUB_RESERVE_MB);
 			uint32_t this_part = APA_BUCKETS[bk].mb;
 			uint32_t this_data = this_part - HDL_SUB_RESERVE_MB;
 			if (this_data > remaining) this_data = remaining;
+			plan->sub_size_strs[plan->subs_needed] = APA_BUCKETS[bk].str;
 			plan->subs_needed++;
 			plan->subs_total_size_mb += this_part;
 			remaining -= this_data;
@@ -477,9 +487,14 @@ static void print_install_plan(const install_plan_t *plan)
 	scr_printf("    title:     %s\n", plan->volume_id);
 	scr_printf("    fmt args:  disc=0x%02x layer1=%u\n",
 	           plan->disc_type, (unsigned)plan->layer1_start);
-	if (plan->subs_needed > 0)
+	if (plan->subs_needed > 0) {
 		scr_printf("    sub parts: %d (%u MB total)\n",
 		           plan->subs_needed, (unsigned)plan->subs_total_size_mb);
+		int i;
+		for (i = 0; i < plan->subs_needed; i++)
+			scr_printf("      [%d] %s\n",
+			           i + 1, plan->sub_size_strs[i]);
+	}
 	scr_printf("  no writes performed.\n");
 }
 
@@ -517,6 +532,10 @@ static int partition_exists(const char *target)
  * HDL header via fileXioFormat. On format failure the half-created
  * partition is removed so the disk doesn't accumulate garbage.
  *
+ * For ISOs > 4 GB the main partition needs sub-partitions chained
+ * onto it; HIOCADDSUB on the still-open main fd grows the chain.
+ * Pattern matches HDLGameInstaller's CreateAndFormatPartition.
+ *
  * Note: every fileXio* path that names a partition needs the
  * "hdd0:" device prefix. We store partition_name bare (so it
  * matches what fileXioDread returns) and add the prefix on demand
@@ -535,6 +554,22 @@ static int execute_install(const install_plan_t *plan)
 	if (fd < 0) {
 		scr_printf("  open failed: %d\n", fd);
 		return -1;
+	}
+
+	int i;
+	for (i = 0; i < plan->subs_needed; i++) {
+		const char *sz = plan->sub_size_strs[i];
+		scr_printf("  add sub %d/%d (%s)\n",
+		           i + 1, plan->subs_needed, sz);
+		int sret = fileXioIoctl2(fd, HIOCADDSUB,
+		                         (char *)sz, strlen(sz) + 1,
+		                         NULL, 0);
+		if (sret < 0) {
+			scr_printf("  add_sub %d failed: %d\n", i + 1, sret);
+			fileXioClose(fd);
+			fileXioRemove(hdd_path);
+			return -1;
+		}
 	}
 	fileXioClose(fd);
 
