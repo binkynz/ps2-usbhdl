@@ -1,0 +1,20 @@
+#!/bin/sh
+# Build wrapper that runs `make` inside a project-local Docker image
+# (ps2dev/ps2dev with `make` layered on). The image is built once and
+# cached; subsequent invocations are instant. Forwards args to make.
+set -eu
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+image=ps2-usbhdl-build:latest
+
+docker build -q \
+	-t "$image" \
+	-f "$repo_root/scripts/Dockerfile" \
+	"$repo_root/scripts" >/dev/null
+
+exec docker run --rm \
+	-v "$repo_root:/src" \
+	-w /src \
+	-u "$(id -u):$(id -g)" \
+	"$image" \
+	make "$@"
