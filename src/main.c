@@ -638,21 +638,24 @@ static void maybe_install(const install_plan_t *plan, const char *iso_path)
 		return;
 	}
 
+	if (exists > 0)
+		scr_printf("\n  %s exists; will remove + reinstall.\n",
+		           plan->partition_name);
+
+	scr_printf("  WET RUN in 10s. POWER OFF NOW to abort.\n");
+	delay_ms(10000);
+
+	/* Past the abort window — now destructive ops can run. */
 	if (exists > 0) {
 		char hdd_path[64];
 		snprintf(hdd_path, sizeof(hdd_path), "hdd0:%s",
 		         plan->partition_name);
-		scr_printf("\n  %s exists; removing for clean reinstall\n",
-		           plan->partition_name);
 		int rret = fileXioRemove(hdd_path);
 		if (rret < 0) {
 			scr_printf("  remove failed: %d, aborting\n", rret);
 			return;
 		}
 	}
-
-	scr_printf("\n  WET RUN in 10s. POWER OFF NOW to abort.\n");
-	delay_ms(10000);
 	if (execute_install(plan) < 0) return;
 	stream_iso_to_partition(plan, iso_path);
 }
