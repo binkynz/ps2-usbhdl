@@ -59,6 +59,20 @@ keep that wrap behavior in mind.
 USB 1.1 throughput is ~1 MB/s. A 4 GB DVD takes ~67 minutes to
 stream. Test new code paths against `test.iso` first.
 
+## Formatting
+
+C sources are formatted with `clang-format` per the `.clang-format`
+at the root (LLVM defaults). Two ways to keep your local clean:
+
+```sh
+just fmt          # format everything in-place
+just fmt-check    # CI-style check (also run by GHA on every push)
+just install-hooks # symlink hooks/pre-commit into .git/hooks/
+```
+
+The pre-commit hook runs `clang-format --dry-run --Werror` against
+staged files only and refuses the commit on any unformatted hunk.
+
 ## House style for commits
 
 Imperative subjects, body explains *why* not *what*, lines wrap

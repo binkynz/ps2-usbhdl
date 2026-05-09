@@ -80,6 +80,21 @@ deploy TARGET:
 usb-list:
     @lsblk -p -o NAME,SIZE,TRAN,MOUNTPOINT,LABEL | awk 'NR==1 || $3=="usb"'
 
+# Format every C source/header in-place via clang-format.
+fmt:
+    @clang-format -i src/*.c src/*.h test/*.c
+    @echo "  formatted."
+
+# Verify every C source/header is clang-format-clean (CI gate).
+fmt-check:
+    @clang-format --dry-run --Werror src/*.c src/*.h test/*.c
+
+# Install the project's git hooks (clang-format pre-commit check).
+install-hooks:
+    @mkdir -p .git/hooks
+    @ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
+    @echo "  pre-commit hook installed (symlinked from hooks/)."
+
 # Extract PS2SDK headers to .ps2sdk/ so clangd / your LSP can resolve
 # <kernel.h>, <fileXio_rpc.h>, etc. Run once after cloning. The
 # extracted tree is gitignored; re-run if PS2SDK upstream changes.

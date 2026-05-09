@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check formatting
+        run: clang-format --dry-run --Werror src/*.c src/*.h test/*.c
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Build and load Docker image (cached)
