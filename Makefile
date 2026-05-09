@@ -10,7 +10,8 @@ EE_BUILD_DIR = build
 # problem entirely.
 # Standard PS2SDK-shipped IRXes.
 PS2SDK_IRX_NAMES = iomanX fileXio poweroff ps2dev9 ps2atad \
-                   usbd bdm bdmfs_fatfs usbmass_bd
+                   usbd bdm bdmfs_fatfs usbmass_bd \
+                   sio2man padman
 
 # IRXes from HDLGameInstaller, vendored under vendor/irx/.
 # We use ps2hdd_hdl.irx (the HDL-aware fork) instead of the standard
@@ -22,7 +23,7 @@ IRX_OBJS  = $(addprefix $(EE_BUILD_DIR)/, $(addsuffix _irx.o, $(IRX_NAMES)))
 
 EE_OBJS = $(EE_BUILD_DIR)/main.o $(IRX_OBJS)
 
-EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches
+EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches -lpad
 
 all: $(EE_BIN)
 

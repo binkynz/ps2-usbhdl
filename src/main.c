@@ -21,6 +21,7 @@
 #include <fileXio_rpc.h>
 #include <io_common.h>
 #include <libhdd.h>
+#include <libpad.h>
 
 extern unsigned char iomanX_irx[];        extern unsigned int size_iomanX_irx;
 extern unsigned char fileXio_irx[];       extern unsigned int size_fileXio_irx;
@@ -33,6 +34,8 @@ extern unsigned char usbd_irx[];          extern unsigned int size_usbd_irx;
 extern unsigned char bdm_irx[];           extern unsigned int size_bdm_irx;
 extern unsigned char bdmfs_fatfs_irx[];   extern unsigned int size_bdmfs_fatfs_irx;
 extern unsigned char usbmass_bd_irx[];    extern unsigned int size_usbmass_bd_irx;
+extern unsigned char sio2man_irx[];       extern unsigned int size_sio2man_irx;
+extern unsigned char padman_irx[];        extern unsigned int size_padman_irx;
 
 /* HDL partition layout constants. Main partitions reserve 4 MB
  * for the HDL header zone (APA + ICON3D + system.cnf + icon + KELF);
@@ -124,9 +127,48 @@ static void boot_iop_with_modules(void)
 	fails += load_irx("bdm",         bdm_irx,         size_bdm_irx,         0, NULL) < 0;
 	fails += load_irx("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx, 0, NULL) < 0;
 	fails += load_irx("usbmass_bd",  usbmass_bd_irx,  size_usbmass_bd_irx,  0, NULL) < 0;
+	fails += load_irx("sio2man",     sio2man_irx,     size_sio2man_irx,     0, NULL) < 0;
+	fails += load_irx("padman",      padman_irx,      size_padman_irx,      0, NULL) < 0;
 
 	scr_printf("  IOP modules: %s\n",
-	           fails == 0 ? "all 11 ok" : "FAILURES above");
+	           fails == 0 ? "all 13 ok" : "FAILURES above");
+}
+
+/* Pad state buffer. libpad requires 256 bytes, 64-byte aligned. */
+static char pad_buf[256] __attribute__((aligned(64)));
+
+/* Bring up port 0 / slot 0 and wait for the pad to reach STABLE.
+ * Returns 1 on success, 0 if no pad is connected within timeout. */
+static int pad_init_port0(void)
+{
+	padInit(0);
+	if (padPortOpen(0, 0, pad_buf) == 0)
+		return 0;
+
+	int retries = 100; /* ~10 seconds at 100 ms each */
+	while (retries-- > 0) {
+		int state = padGetState(0, 0);
+		if (state == PAD_STATE_STABLE) return 1;
+		if (state == PAD_STATE_DISCONN) {
+			/* No pad connected — caller falls back. */
+			return 0;
+		}
+		delay_ms(100);
+	}
+	return 0;
+}
+
+/* Render a fixed-width [###  ] progress bar into out. */
+static void render_bar(char *out, int width, int pct)
+{
+	int inner = width - 2;
+	int filled = (pct * inner) / 100;
+	out[0] = '[';
+	int i;
+	for (i = 0; i < inner; i++)
+		out[1 + i] = (i < filled) ? '#' : ' ';
+	out[width - 1] = ']';
+	out[width] = 0;
 }
 
 static void show_hdd(void)
@@ -590,15 +632,27 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 		if (pct != last_pct) {
 			time_t elapsed = time(NULL) - start_t;
 			unsigned eta = 0;
+			unsigned mbps10 = 0; /* MB/s × 10 (one decimal) */
 			if (elapsed > 0 && written > 0) {
 				uint64_t remaining = total - written;
 				eta = (unsigned)((remaining * (uint64_t)elapsed)
 				                 / written);
+				mbps10 = (unsigned)((written * 10ULL) >> 20)
+				         / (unsigned)elapsed;
 			}
+
+			char bar[31];
+			render_bar(bar, 30, pct);
+
 			scr_clearline(progress_y);
 			scr_setXY(0, progress_y);
-			scr_printf("  %u/%u MB (%d%%)  elapsed %u:%02u  ETA %u:%02u",
-			           (unsigned)(written >> 20), total_mb, pct,
+			scr_printf("  %s %3d%%", bar, pct);
+
+			scr_clearline(progress_y + 1);
+			scr_setXY(0, progress_y + 1);
+			scr_printf("  %u/%u MB  %u.%u MB/s  %u:%02u elapsed  ETA %u:%02u",
+			           (unsigned)(written >> 20), total_mb,
+			           mbps10 / 10, mbps10 % 10,
 			           (unsigned)(elapsed / 60),
 			           (unsigned)(elapsed % 60),
 			           eta / 60, eta % 60);
@@ -610,7 +664,7 @@ static int stream_iso_to_partition(const install_plan_t *plan,
 	fileXioClose(hdl_fd);
 	fileXioUmount("hdl0:");
 
-	scr_setXY(0, progress_y + 1);
+	scr_setXY(0, progress_y + 2);
 	if (written == total) {
 		time_t elapsed = time(NULL) - start_t;
 		scr_printf("  install complete in %u:%02u — boot via OPL\n",
@@ -660,6 +714,67 @@ static void maybe_install(const install_plan_t *plan, const char *iso_path)
 	stream_iso_to_partition(plan, iso_path);
 }
 
+/* Show a D-pad navigable menu of ISO filenames. Returns the chosen
+ * index, or -1 if the user aborts with Triangle. With one ISO we
+ * skip the menu and return 0; with no pad available we also fall
+ * back to 0 silently. */
+#define MAX_ISOS 16
+static int pick_iso(char isos[][280], int count)
+{
+	if (count <= 1) return count == 1 ? 0 : -1;
+
+	if (!pad_init_port0()) {
+		scr_printf("  no pad - using %s\n", isos[0]);
+		return 0;
+	}
+
+	int idx = 0;
+	int prev_pressed = 0;
+	int menu_y = scr_getY();
+	int dirty = 1;
+
+	for (;;) {
+		if (dirty) {
+			int i;
+			for (i = 0; i < count; i++) {
+				scr_clearline(menu_y + i);
+				scr_setXY(0, menu_y + i);
+				scr_printf("    %c %s",
+				           i == idx ? '>' : ' ', isos[i]);
+			}
+			scr_clearline(menu_y + count);
+			scr_setXY(0, menu_y + count);
+			scr_printf("    [D-pad] move  [X] install  [/\\] abort");
+			dirty = 0;
+		}
+
+		struct padButtonStatus pad;
+		if (padRead(0, 0, &pad) != 0) {
+			int pressed = (~pad.btns) & 0xFFFF;
+			int newly = pressed & ~prev_pressed;
+			prev_pressed = pressed;
+
+			if (newly & PAD_UP) {
+				idx = (idx + count - 1) % count;
+				dirty = 1;
+			}
+			if (newly & PAD_DOWN) {
+				idx = (idx + 1) % count;
+				dirty = 1;
+			}
+			if (newly & PAD_CROSS) {
+				scr_setXY(0, menu_y + count + 1);
+				return idx;
+			}
+			if (newly & PAD_TRIANGLE) {
+				scr_setXY(0, menu_y + count + 1);
+				return -1;
+			}
+		}
+		delay_ms(50);
+	}
+}
+
 static void plan_install_from_usb(void)
 {
 	scr_printf("\n  waiting for USB...\n");
@@ -676,29 +791,37 @@ static void plan_install_from_usb(void)
 		return;
 	}
 
-	char first_iso[280] = {0};
-	struct dirent *de;
+	static char isos[MAX_ISOS][280];
+	int iso_count = 0;
 	int total = 0;
+	struct dirent *de;
 	while ((de = readdir(d)) != NULL) {
 		total++;
-		if (!first_iso[0] && ends_with_iso(de->d_name))
-			snprintf(first_iso, sizeof(first_iso),
+		if (iso_count < MAX_ISOS && ends_with_iso(de->d_name)) {
+			snprintf(isos[iso_count], sizeof(isos[0]),
 			         "mass:/%s", de->d_name);
+			iso_count++;
+		}
 	}
 	closedir(d);
-	scr_printf("  USB: %d entries\n", total);
+	scr_printf("  USB: %d entries (%d .iso)\n", total, iso_count);
 
-	if (!first_iso[0]) {
+	if (iso_count == 0) {
 		scr_printf("  no .iso file found\n");
 		return;
 	}
 
-	scr_printf("  ISO: %s\n", first_iso);
+	int sel = pick_iso(isos, iso_count);
+	if (sel < 0) {
+		scr_printf("  aborted by user\n");
+		return;
+	}
+	scr_printf("  ISO: %s\n", isos[sel]);
 
 	install_plan_t plan;
-	compute_install_plan(first_iso, &plan);
+	compute_install_plan(isos[sel], &plan);
 	print_install_plan(&plan);
-	maybe_install(&plan, first_iso);
+	maybe_install(&plan, isos[sel]);
 }
 
 int main(int argc, char *argv[])
