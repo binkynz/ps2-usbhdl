@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <time.h>
 #include <kernel.h>
 #include <delaythread.h>
 #include <debug.h>
@@ -18,6 +19,7 @@
  * because libhdd assumes the RPC has been started. */
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
+#include <io_common.h>
 #include <libhdd.h>
 
 extern unsigned char iomanX_irx[];        extern unsigned int size_iomanX_irx;
@@ -516,7 +518,112 @@ static int execute_install(const install_plan_t *plan)
 	return 0;
 }
 
-static void maybe_install(const install_plan_t *plan)
+/* Stream the ISO into the partition's data area via hdl0:.
+ *
+ * The hdl0: device is hdlfs.irx's view of an HDL-format partition:
+ * mount it pointing at hdd0:partname, then open "hdl0:" for I/O —
+ * offset 0 is the start of game data (after the 4 MB HDL header
+ * zone), and writes flow through hdlfs into the right offsets in
+ * main + sub partitions automatically. This is the same pattern
+ * HDLGameInstaller's MountOpenGame uses for its install path. */
+static int stream_iso_to_partition(const install_plan_t *plan,
+                                   const char *iso_path)
+{
+	char hdd_path[64];
+	snprintf(hdd_path, sizeof(hdd_path), "hdd0:%s", plan->partition_name);
+
+	scr_printf("\n  mounting hdl0:...\n");
+	int ret = fileXioMount("hdl0:", hdd_path, FIO_MT_RDWR);
+	if (ret < 0) {
+		scr_printf("  mount failed: %d\n", ret);
+		return -1;
+	}
+
+	int hdl_fd = fileXioOpen("hdl0:", O_RDWR);
+	if (hdl_fd < 0) {
+		scr_printf("  hdl0: open failed: %d\n", hdl_fd);
+		fileXioUmount("hdl0:");
+		return -1;
+	}
+
+	int iso_fd = open(iso_path, O_RDONLY);
+	if (iso_fd < 0) {
+		scr_printf("  iso open failed: %d\n", iso_fd);
+		fileXioClose(hdl_fd);
+		fileXioUmount("hdl0:");
+		return -1;
+	}
+
+	/* 1 MB chunks: a sweet spot between USB-1.1 throughput
+	 * (≈1 MB/s) and not blowing too much of the 32 MB EE RAM. */
+	static uint8_t buf[1024 * 1024] __attribute__((aligned(64)));
+
+	uint64_t total = (uint64_t)plan->iso_sectors_2k * 2048;
+	unsigned total_mb = (unsigned)(total >> 20);
+	uint64_t written = 0;
+	int last_pct = -1;
+	time_t start_t = time(NULL);
+
+	scr_printf("  streaming %u MB (USB 1.1 ≈ 1 MB/s, expect ~%u min)\n",
+	           total_mb, (total_mb + 59) / 60);
+	int progress_y = scr_getY();
+
+	while (written < total) {
+		uint32_t want = (total - written > sizeof(buf))
+		                ? (uint32_t)sizeof(buf)
+		                : (uint32_t)(total - written);
+		int got = read(iso_fd, buf, want);
+		if (got <= 0) {
+			scr_printf("\n  read err at %u MB: %d\n",
+			           (unsigned)(written >> 20), got);
+			break;
+		}
+		int wrote = fileXioWrite(hdl_fd, buf, got);
+		if (wrote != got) {
+			scr_printf("\n  write err at %u MB: %d/%d\n",
+			           (unsigned)(written >> 20), wrote, got);
+			break;
+		}
+		written += wrote;
+
+		int pct = (int)((written * 100) / total);
+		if (pct != last_pct) {
+			time_t elapsed = time(NULL) - start_t;
+			unsigned eta = 0;
+			if (elapsed > 0 && written > 0) {
+				uint64_t remaining = total - written;
+				eta = (unsigned)((remaining * (uint64_t)elapsed)
+				                 / written);
+			}
+			scr_clearline(progress_y);
+			scr_setXY(0, progress_y);
+			scr_printf("  %u/%u MB (%d%%)  elapsed %u:%02u  ETA %u:%02u",
+			           (unsigned)(written >> 20), total_mb, pct,
+			           (unsigned)(elapsed / 60),
+			           (unsigned)(elapsed % 60),
+			           eta / 60, eta % 60);
+			last_pct = pct;
+		}
+	}
+
+	close(iso_fd);
+	fileXioClose(hdl_fd);
+	fileXioUmount("hdl0:");
+
+	scr_setXY(0, progress_y + 1);
+	if (written == total) {
+		time_t elapsed = time(NULL) - start_t;
+		scr_printf("  install complete in %u:%02u — boot via OPL\n",
+		           (unsigned)(elapsed / 60),
+		           (unsigned)(elapsed % 60));
+		return 0;
+	}
+	scr_printf("  install incomplete: %u/%u MB written\n",
+	           (unsigned)(written >> 20), total_mb);
+	return -1;
+}
+
+static void maybe_install(const install_plan_t *plan, const char *iso_path)
 {
 	if (!plan->valid) return;
 
@@ -530,16 +637,24 @@ static void maybe_install(const install_plan_t *plan)
 		scr_printf("  ABORT: cannot enumerate hdd0:\n");
 		return;
 	}
+
 	if (exists > 0) {
-		scr_printf("  ABORT: %s already exists\n", plan->partition_name);
-		return;
+		char hdd_path[64];
+		snprintf(hdd_path, sizeof(hdd_path), "hdd0:%s",
+		         plan->partition_name);
+		scr_printf("\n  %s exists; removing for clean reinstall\n",
+		           plan->partition_name);
+		int rret = fileXioRemove(hdd_path);
+		if (rret < 0) {
+			scr_printf("  remove failed: %d, aborting\n", rret);
+			return;
+		}
 	}
 
 	scr_printf("\n  WET RUN in 10s. POWER OFF NOW to abort.\n");
 	delay_ms(10000);
-
-	if (execute_install(plan) == 0)
-		scr_printf("  partition + header ok. next: stream ISO data.\n");
+	if (execute_install(plan) < 0) return;
+	stream_iso_to_partition(plan, iso_path);
 }
 
 static void plan_install_from_usb(void)
@@ -580,7 +695,7 @@ static void plan_install_from_usb(void)
 	install_plan_t plan;
 	compute_install_plan(first_iso, &plan);
 	print_install_plan(&plan);
-	maybe_install(&plan);
+	maybe_install(&plan, first_iso);
 }
 
 int main(int argc, char *argv[])
