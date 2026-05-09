@@ -39,24 +39,54 @@ int pick_mode(void) {
   if (!pad_init())
     return -1;
 
-  scr_printf("\n  [X]  install games from USB\n");
-  scr_printf("  [#]  manage installed games\n");
-  scr_printf("  [/\\] exit\n");
+  static const char *labels[] = {
+      "install games from USB",
+      "manage installed games",
+      "exit",
+  };
+  enum { COUNT = 3 };
 
+  int idx = 0;
   int prev_pressed = 0;
+  int menu_y = scr_getY();
+  int dirty = 1;
+
   for (;;) {
+    if (dirty) {
+      int i;
+      for (i = 0; i < COUNT; i++) {
+        scr_clearline(menu_y + i);
+        scr_setXY(0, menu_y + i);
+        scr_printf("    %c %s", i == idx ? '>' : ' ', labels[i]);
+      }
+      scr_clearline(menu_y + COUNT);
+      scr_setXY(0, menu_y + COUNT);
+      scr_printf("    [D-pad] move  [X] select  [/\\] exit");
+      dirty = 0;
+    }
+
     struct padButtonStatus pad;
     if (padRead(0, 0, &pad) != 0) {
       int pressed = (~pad.btns) & 0xFFFF;
       int newly = pressed & ~prev_pressed;
       prev_pressed = pressed;
 
-      if (newly & PAD_CROSS)
-        return 0;
-      if (newly & PAD_SQUARE)
-        return 1;
-      if (newly & PAD_TRIANGLE)
+      if (newly & PAD_UP) {
+        idx = (idx + COUNT - 1) % COUNT;
+        dirty = 1;
+      }
+      if (newly & PAD_DOWN) {
+        idx = (idx + 1) % COUNT;
+        dirty = 1;
+      }
+      if (newly & PAD_CROSS) {
+        scr_setXY(0, menu_y + COUNT + 1);
+        return idx == 2 ? -1 : idx; /* 0=install, 1=manage, 2=exit */
+      }
+      if (newly & PAD_TRIANGLE) {
+        scr_setXY(0, menu_y + COUNT + 1);
         return -1;
+      }
     }
     delay_ms(50);
   }
