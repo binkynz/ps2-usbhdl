@@ -14,23 +14,51 @@ void delay_ms(int ms)
 
 /* Pad state buffer. libpad requires 256 bytes, 64-byte aligned. */
 static char pad_buf[256] __attribute__((aligned(64)));
+static int pad_inited = 0;
 
-/* Bring up port 0 / slot 0 and wait for the pad to reach STABLE.
- * Returns 1 on success, 0 if no pad is connected within timeout. */
-static int pad_init_port0(void)
+int pad_init(void)
 {
+	if (pad_inited) return 1;
+
 	padInit(0);
 	if (padPortOpen(0, 0, pad_buf) == 0)
 		return 0;
 
-	int retries = 100; /* ~10 seconds at 100 ms each */
+	int retries = 30; /* ~3 seconds at 100 ms each */
 	while (retries-- > 0) {
 		int state = padGetState(0, 0);
-		if (state == PAD_STATE_STABLE) return 1;
+		if (state == PAD_STATE_STABLE) {
+			pad_inited = 1;
+			return 1;
+		}
 		if (state == PAD_STATE_DISCONN) return 0;
 		delay_ms(100);
 	}
 	return 0;
+}
+
+int pick_mode(void)
+{
+	if (!pad_init()) return -1;
+
+	scr_printf("\n  [X]  install games from USB\n");
+	scr_printf("  [#]  manage installed games\n");
+	scr_printf("  [/\\] exit\n");
+
+	int prev_pressed = 0;
+	for (;;) {
+		struct padButtonStatus pad;
+		if (padRead(0, 0, &pad) != 0) {
+			int pressed = (~pad.btns) & 0xFFFF;
+			int newly = pressed & ~prev_pressed;
+			prev_pressed = pressed;
+
+			if (newly & PAD_CROSS)    return 0;
+			if (newly & PAD_SQUARE)   return 1;
+			if (newly & PAD_TRIANGLE) return -1;
+		}
+		delay_ms(50);
+	}
 }
 
 int pick_items(char items[][280], int count, int selected[])
@@ -44,7 +72,7 @@ int pick_items(char items[][280], int count, int selected[])
 		return 1;
 	}
 
-	if (!pad_init_port0()) {
+	if (!pad_init()) {
 		scr_printf("  no pad - selecting first only: %s\n", items[0]);
 		selected[0] = 1;
 		return 1;

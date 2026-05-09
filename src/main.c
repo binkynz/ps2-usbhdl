@@ -12,19 +12,6 @@
 #include "hdl.h"
 #include "ui.h"
 
-/* Sentinel-file gate. Returns 1 only if the named file exists at
- * mass:/<name>. Used to require a deliberate per-action opt-in
- * before any destructive op runs. */
-static int sentinel_present(const char *name)
-{
-	char path[64];
-	snprintf(path, sizeof(path), "mass:/%s", name);
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) return 0;
-	close(fd);
-	return 1;
-}
-
 /* Run the create + format + stream sequence for one planned ISO.
  * Returns 0 on success, -1 on any failure. */
 static int install_one(const install_plan_t *plan, const char *iso_path)
@@ -47,8 +34,8 @@ static int install_one(const install_plan_t *plan, const char *iso_path)
 	return stream_iso_to_partition(plan, iso_path);
 }
 
-/* Install flow: enumerate USB ISOs, batch-pick, plan, optionally
- * install if INSTALL_NOW is present. */
+/* Install flow: enumerate USB ISOs, batch-pick, plan, install
+ * after a 10-second countdown if anything was selected. */
 static void plan_install_from_usb(void)
 {
 	scr_printf("\n  install mode\n");
@@ -103,11 +90,6 @@ static void plan_install_from_usb(void)
 		print_install_plan(&plans[i]);
 	}
 
-	if (!sentinel_present("INSTALL_NOW")) {
-		scr_printf("\n  (touch mass:/INSTALL_NOW to enable wet run)\n");
-		return;
-	}
-
 	scr_printf("\n  WET RUN (%d ISO%s) in 10s. POWER OFF NOW to abort.\n",
 	           n_selected, n_selected == 1 ? "" : "s");
 	delay_ms(10000);
@@ -145,8 +127,6 @@ static void manage_hdl_partitions(void)
 	}
 	scr_printf("  %d HDL partition%s:\n", n, n == 1 ? "" : "s");
 
-	/* Build display strings ("PP.HDL.SCUS_971.99 — 4096 MB") for
-	 * the picker. */
 	static char display[MAX_PARTS][280];
 	int i;
 	for (i = 0; i < n; i++)
@@ -192,13 +172,19 @@ int main(int argc, char *argv[])
 	boot_iop_with_modules();
 	show_hdd();
 
-	/* Mode dispatch via sentinel files on the USB stick. Manage
-	 * takes precedence so an accidental MANAGE_NOW + INSTALL_NOW
-	 * combo doesn't silently install instead of asking. */
-	if (sentinel_present("MANAGE_NOW"))
-		manage_hdl_partitions();
-	else
-		plan_install_from_usb();
+	if (!pad_init()) {
+		scr_printf("\n  no controller detected.\n");
+		scr_printf("  connect one and re-run.\n");
+		SleepThread();
+		return 0;
+	}
+
+	int mode = pick_mode();
+	switch (mode) {
+	case 0:  plan_install_from_usb();      break;
+	case 1:  manage_hdl_partitions();      break;
+	default: scr_printf("\n  exit selected\n"); break;
+	}
 
 	scr_printf("\n  done. power-cycle to return.\n");
 	SleepThread();

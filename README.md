@@ -38,8 +38,8 @@ What works:
   extract the canonical startup id from `SYSTEM.CNF`.
 - Plans the install: APA partition name (`PP.HDL.<startup>`),
   bucket size, and HDL `FormatArgs`.
-- Wet run gated behind a sentinel file (`mass:/INSTALL_NOW`) and
-  a 10-second abort countdown.
+- Wet run gated by a controller-driven mode picker, multi-select
+  picker, and a 10-second abort countdown.
 - Creates and formats an HDL partition via `fileXioOpen` /
   `fileXioFormat`, with overwrite-on-conflict.
 - Streams the ISO from USB to the partition via `hdl0:` with a
@@ -74,19 +74,23 @@ launching the resulting partitions; HDD-OSD also works.
    just deploy /dev/sdb       # block device path or mount dir
    ```
 
-   This copies `dist/ps2-usbhdl.elf`, `dist/test.iso`, and creates
-   the `INSTALL_NOW` sentinel. `just usb-list` shows candidate
-   device paths.
+   This copies `dist/ps2-usbhdl.elf` and any built test ISOs.
+   `just usb-list` shows candidate device paths.
 
 3. Unmount, plug into the PS2, run `ps2-usbhdl.elf` via uLaunchELF.
 
-4. Pick an ISO with the D-pad, press **X** to install. The
-   10-second WET RUN countdown is your last chance to power-cycle
-   if anything looks wrong; after that the partition is created,
-   formatted, and the ISO data streams over USB 1.1 (~1 MB/s; ~67
-   minutes for a 4 GB ISO).
+4. Pick a mode at the top-level menu — **X** to install games
+   from USB, **Square** to manage existing installs (list +
+   delete), **Triangle** to exit.
 
-5. Boot OPL — the new title appears in the HDD games list.
+5. In install mode: pick ISOs with the D-pad, **Square** to
+   toggle, **X** to start the batch (auto-selects current row
+   if nothing toggled). The 10-second WET RUN countdown is your
+   last chance to power-cycle if anything looks wrong; after
+   that each partition is created, formatted, and streamed over
+   USB 1.1 (~1 MB/s; ~67 minutes for a 4 GB ISO).
+
+6. Boot OPL — installed titles appear in the HDD games list.
 
 ## Building from source
 
@@ -100,7 +104,7 @@ just            # list recipes
 just build      # compile dist/ps2-usbhdl.elf
 just test-iso   # build dist/test.iso (~820 KB hello-world)
 just all        # both
-just deploy DEV # stage outputs + INSTALL_NOW onto USB
+just deploy DEV # stage build outputs onto USB (mounts/unmounts as needed)
 just usb-list   # find candidate USB block devices
 just clean      # remove build/ and dist/
 ```

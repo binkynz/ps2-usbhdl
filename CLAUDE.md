@@ -40,8 +40,8 @@ Host-side task running goes through `just`. Recipes:
 - `just test-iso` — build a tiny hello-world test ISO at
   `dist/test.iso` for fast streaming-pipeline iteration
 - `just all` — both
-- `just deploy <USB-mount-dir>` — copy outputs + create
-  `INSTALL_NOW` sentinel onto a mounted USB stick
+- `just deploy <USB-mount-dir>` — copy outputs onto a mounted
+  USB stick (mounts/unmounts via sudo as needed)
 - `just clean` — remove `build/` and `dist/`
 
 Inside the container, `make` (driven by the project `Makefile`)

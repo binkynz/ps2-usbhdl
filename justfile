@@ -64,8 +64,8 @@ deploy TARGET:
 
     echo "Staging to $mp (sudo)..."
     sudo cp -v dist/ps2-usbhdl.elf "$mp/"
-    [ -f dist/test.iso ] && sudo cp -v dist/test.iso "$mp/" || :
-    sudo touch "$mp/INSTALL_NOW"
+    [ -f dist/test.iso ]       && sudo cp -v dist/test.iso       "$mp/" || :
+    [ -f dist/test-large.iso ] && sudo cp -v dist/test-large.iso "$mp/" || :
     sync
 
     if [ "$we_mounted" = "1" ]; then
