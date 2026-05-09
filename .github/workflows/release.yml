@@ -19,8 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # For workflow_dispatch we check out the named tag; for the
-          # tag-push trigger, the default ref is the tag itself.
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
@@ -33,8 +31,16 @@ jobs:
             echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Docker image
-        run: docker build -q -t ps2-usbhdl-build:latest .
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and load Docker image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ps2-usbhdl-build:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build installer ELF
         run: |

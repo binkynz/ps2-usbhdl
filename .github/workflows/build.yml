@@ -12,8 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -q -t ps2-usbhdl-build:latest .
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and load Docker image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ps2-usbhdl-build:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build installer ELF
         run: |
