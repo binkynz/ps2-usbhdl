@@ -52,6 +52,153 @@ int ends_with_iso(const char *name) {
           (e[2] == 's' || e[2] == 'S') && (e[3] == 'o' || e[3] == 'O'));
 }
 
+int is_iso_split_first_part(const char *name) {
+  int n = strlen(name);
+  if (n < 9)
+    return 0;
+  if (memcmp(name + n - 4, ".001", 4) != 0)
+    return 0;
+  return (name[n - 8] == '.') && (name[n - 7] == 'i' || name[n - 7] == 'I') &&
+         (name[n - 6] == 's' || name[n - 6] == 'S') &&
+         (name[n - 5] == 'o' || name[n - 5] == 'O');
+}
+
+/* ===========================================================
+ * iso_file_t: single-file or split-file logical reader.
+ * =========================================================== */
+
+static int iso_file_open_part(iso_file_t *f, int part_idx) {
+  char path[300];
+  if (f->single_mode)
+    snprintf(path, sizeof(path), "%s", f->base);
+  else
+    snprintf(path, sizeof(path), "%s.%03d", f->base, part_idx + 1);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -1;
+  f->fd = fd;
+  f->cur_part = part_idx;
+  f->cur_part_pos = 0;
+  return 0;
+}
+
+static uint64_t iso_file_part_size(int fd) {
+  off_t cur = lseek(fd, 0, SEEK_CUR);
+  off_t end = lseek(fd, 0, SEEK_END);
+  lseek(fd, cur, SEEK_SET);
+  return (uint64_t)end;
+}
+
+int iso_file_open(iso_file_t *f, const char *path) {
+  memset(f, 0, sizeof(*f));
+  f->fd = -1;
+  snprintf(f->base, sizeof(f->base), "%s", path);
+
+  /* Single-file fast path: try the path verbatim. */
+  int fd = open(path, O_RDONLY);
+  if (fd >= 0) {
+    f->single_mode = 1;
+    f->parts = 1;
+    f->part_sizes[0] = iso_file_part_size(fd);
+    f->total = f->part_sizes[0];
+    f->fd = fd;
+    f->cur_part = 0;
+    f->cur_part_pos = 0;
+    return 0;
+  }
+
+  /* Split-file mode: probe <path>.001, .002, ... in order. */
+  f->single_mode = 0;
+  f->parts = 0;
+  f->total = 0;
+  while (f->parts < ISO_FILE_MAX_PARTS) {
+    char part_path[300];
+    snprintf(part_path, sizeof(part_path), "%s.%03d", f->base, f->parts + 1);
+    int p = open(part_path, O_RDONLY);
+    if (p < 0)
+      break;
+    f->part_sizes[f->parts] = iso_file_part_size(p);
+    f->total += f->part_sizes[f->parts];
+    close(p);
+    f->parts++;
+  }
+
+  if (f->parts == 0)
+    return -1;
+
+  return iso_file_open_part(f, 0);
+}
+
+int iso_file_seek(iso_file_t *f, uint64_t offset) {
+  if (offset > f->total)
+    return -1;
+
+  /* Find the part that contains `offset`. */
+  uint64_t accum = 0;
+  int target_part = 0;
+  int i;
+  for (i = 0; i < f->parts; i++) {
+    if (offset < accum + f->part_sizes[i]) {
+      target_part = i;
+      break;
+    }
+    accum += f->part_sizes[i];
+  }
+  uint64_t local = offset - accum;
+
+  /* Reopen the right part if we're not on it already. */
+  if (f->fd < 0 || f->cur_part != target_part) {
+    if (f->fd >= 0)
+      close(f->fd);
+    f->fd = -1;
+    if (iso_file_open_part(f, target_part) < 0)
+      return -1;
+  }
+
+  if (lseek(f->fd, (off_t)local, SEEK_SET) != (off_t)local)
+    return -1;
+  f->cur_part_pos = local;
+  return 0;
+}
+
+int iso_file_read(iso_file_t *f, void *buf, uint32_t want) {
+  uint8_t *p = (uint8_t *)buf;
+  uint32_t total = 0;
+
+  while (want > 0) {
+    if (f->cur_part >= f->parts)
+      break;
+
+    uint64_t part_remaining = f->part_sizes[f->cur_part] - f->cur_part_pos;
+    if (part_remaining == 0) {
+      /* End of current part — advance to the next, if any. */
+      close(f->fd);
+      f->fd = -1;
+      if (f->cur_part + 1 >= f->parts)
+        break;
+      if (iso_file_open_part(f, f->cur_part + 1) < 0)
+        break;
+      continue;
+    }
+
+    uint32_t chunk = (want > part_remaining) ? (uint32_t)part_remaining : want;
+    int got = read(f->fd, p, chunk);
+    if (got <= 0)
+      break;
+    p += got;
+    total += got;
+    want -= got;
+    f->cur_part_pos += got;
+  }
+  return (int)total;
+}
+
+void iso_file_close(iso_file_t *f) {
+  if (f->fd >= 0)
+    close(f->fd);
+  f->fd = -1;
+}
+
 /* Keep [A-Z0-9_.]; uppercase a-z; drop everything else. Truncate.
  * Dots are allowed because canonical PS2 startup ids contain them
  * (e.g. SCES_503.62) and APA partition names accept dots. */
@@ -68,14 +215,13 @@ static void sanitize_for_partname(const char *src, char *dst, int dstsz) {
   dst[j] = 0;
 }
 
-/* Read sectors from an open ISO. PS2 lseek is 32-bit, but the
- * metadata we need (root dir, SYSTEM.CNF) lives at low LBAs so
- * this is fine here. */
-static int read_sector(int fd, uint32_t lba, void *buf) {
-  off_t want = (off_t)lba * 2048;
-  if (lseek(fd, want, SEEK_SET) != want)
+/* Read one sector through the iso_file_t layer (handles split
+ * boundaries even though the metadata we touch — PVD, root dir,
+ * SYSTEM.CNF — always lives within the first part). */
+static int read_sector(iso_file_t *f, uint32_t lba, void *buf) {
+  if (iso_file_seek(f, (uint64_t)lba * 2048) < 0)
     return -1;
-  if (read(fd, buf, 2048) != 2048)
+  if (iso_file_read(f, buf, 2048) != 2048)
     return -1;
   return 0;
 }
@@ -84,7 +230,7 @@ static int read_sector(int fd, uint32_t lba, void *buf) {
  * `target` (case-sensitive; ISO9660 names are uppercase by
  * convention). Returns 1 if found and writes the entry's extent to
  * `out`, 0 if not found, -1 on read error. */
-static int find_in_dir(int fd, iso_extent_t dir, const char *target,
+static int find_in_dir(iso_file_t *f, iso_extent_t dir, const char *target,
                        iso_extent_t *out) {
   int target_len = strlen(target);
   uint32_t bytes_left = dir.size;
@@ -92,7 +238,7 @@ static int find_in_dir(int fd, iso_extent_t dir, const char *target,
   static unsigned char sector[2048];
 
   while (bytes_left > 0) {
-    if (read_sector(fd, lba, sector) < 0)
+    if (read_sector(f, lba, sector) < 0)
       return -1;
 
     uint32_t off = 0;
@@ -128,8 +274,8 @@ static int find_in_dir(int fd, iso_extent_t dir, const char *target,
 
 /* Pull the startup id (e.g. "SCES_503.62") from a PS2 ISO's
  * SYSTEM.CNF. Returns 0 on success, -1 on any failure. */
-static int extract_startup_id(int fd, const unsigned char *pvd, char *out,
-                              int out_sz) {
+static int extract_startup_id(iso_file_t *f, const unsigned char *pvd,
+                              char *out, int out_sz) {
   iso_extent_t root;
   root.lba = pvd[156 + 2] | (pvd[156 + 3] << 8) | (pvd[156 + 4] << 16) |
              (pvd[156 + 5] << 24);
@@ -137,13 +283,13 @@ static int extract_startup_id(int fd, const unsigned char *pvd, char *out,
               (pvd[156 + 13] << 24);
 
   iso_extent_t syscnf;
-  if (find_in_dir(fd, root, "SYSTEM.CNF", &syscnf) != 1)
+  if (find_in_dir(f, root, "SYSTEM.CNF", &syscnf) != 1)
     return -1;
 
   if (syscnf.size > 2048)
     syscnf.size = 2048;
   static char buf[2049];
-  if (read_sector(fd, syscnf.lba, buf) < 0)
+  if (read_sector(f, syscnf.lba, buf) < 0)
     return -1;
   buf[syscnf.size] = 0;
 
@@ -167,18 +313,18 @@ static int extract_startup_id(int fd, const unsigned char *pvd, char *out,
 int compute_install_plan(const char *iso_path, install_plan_t *plan) {
   memset(plan, 0, sizeof(*plan));
 
-  int fd = open(iso_path, O_RDONLY);
-  if (fd < 0)
+  iso_file_t f;
+  if (iso_file_open(&f, iso_path) < 0)
     return -1;
 
   static unsigned char pvd[2048];
-  if (read_sector(fd, 16, pvd) < 0) {
-    close(fd);
+  if (read_sector(&f, 16, pvd) < 0) {
+    iso_file_close(&f);
     return -1;
   }
 
   if (pvd[0] != 0x01 || memcmp(&pvd[1], "CD001", 5) != 0) {
-    close(fd);
+    iso_file_close(&f);
     return -1;
   }
 
@@ -223,9 +369,9 @@ int compute_install_plan(const char *iso_path, install_plan_t *plan) {
   }
 
   /* Best-effort startup id from SYSTEM.CNF. */
-  (void)extract_startup_id(fd, pvd, plan->startup_id, sizeof(plan->startup_id));
+  (void)extract_startup_id(&f, pvd, plan->startup_id, sizeof(plan->startup_id));
 
-  close(fd);
+  iso_file_close(&f);
 
   /* Partition name = "PP.HDL." + canonical startup id, falling
    * back to sanitized volume id. */

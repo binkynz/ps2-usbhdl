@@ -4,6 +4,7 @@
 #include <kernel.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "hdl.h"
@@ -58,8 +59,23 @@ static void plan_install_from_usb(void) {
   struct dirent *de;
   while ((de = readdir(d)) != NULL) {
     total++;
-    if (iso_count < MAX_ISOS && ends_with_iso(de->d_name)) {
+    if (iso_count >= MAX_ISOS)
+      continue;
+    if (ends_with_iso(de->d_name)) {
+      /* Single-file ISO. */
       snprintf(isos[iso_count], sizeof(isos[0]), "mass:/%s", de->d_name);
+      iso_count++;
+    } else if (is_iso_split_first_part(de->d_name)) {
+      /* Split set — strip the trailing ".001" so the picker shows
+       * the logical path. iso_file_open will probe parts itself. */
+      char base[260];
+      size_t name_len = strlen(de->d_name);
+      size_t base_len = name_len - 4;
+      if (base_len >= sizeof(base))
+        continue;
+      memcpy(base, de->d_name, base_len);
+      base[base_len] = 0;
+      snprintf(isos[iso_count], sizeof(isos[0]), "mass:/%s", base);
       iso_count++;
     }
   }

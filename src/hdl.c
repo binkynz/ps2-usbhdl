@@ -194,14 +194,17 @@ int stream_iso_to_partition(const install_plan_t *plan, const char *iso_path) {
   scr_printf("ok\n");
 
   scr_printf("  open ISO        ");
-  int iso_fd = open(iso_path, O_RDONLY);
-  if (iso_fd < 0) {
-    scr_printf("FAIL %d\n", iso_fd);
+  iso_file_t iso;
+  if (iso_file_open(&iso, iso_path) < 0) {
+    scr_printf("FAIL\n");
     fileXioClose(hdl_fd);
     fileXioUmount("hdl0:");
     return -1;
   }
-  scr_printf("ok\n\n");
+  if (iso.parts > 1)
+    scr_printf("ok (%d parts)\n\n", iso.parts);
+  else
+    scr_printf("ok\n\n");
 
   /* 1 MB chunks: a sweet spot between USB-1.1 throughput
    * (≈1 MB/s) and EE RAM. */
@@ -217,7 +220,7 @@ int stream_iso_to_partition(const install_plan_t *plan, const char *iso_path) {
     uint32_t want = (total - written > sizeof(buf))
                         ? (uint32_t)sizeof(buf)
                         : (uint32_t)(total - written);
-    int got = read(iso_fd, buf, want);
+    int got = iso_file_read(&iso, buf, want);
     if (got <= 0) {
       scr_printf("\n  read err at %u MB: %d\n", (unsigned)(written >> 20), got);
       break;
@@ -260,7 +263,7 @@ int stream_iso_to_partition(const install_plan_t *plan, const char *iso_path) {
     }
   }
 
-  close(iso_fd);
+  iso_file_close(&iso);
   fileXioClose(hdl_fd);
   fileXioUmount("hdl0:");
 

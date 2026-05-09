@@ -29,7 +29,40 @@ typedef struct {
 } install_plan_t;
 
 int ends_with_iso(const char *name);
+
+/* Returns 1 if the name matches "*.iso.001" (case-insensitive on
+ * the .iso part). The 001 indicates the first part of a split
+ * ISO; subsequent parts (.002, .003, ...) are siblings and aren't
+ * directly opened by the user. */
+int is_iso_split_first_part(const char *name);
+
 int compute_install_plan(const char *iso_path, install_plan_t *plan);
 void print_install_plan(const install_plan_t *plan);
+
+/* Logical-file abstraction over a single .iso or a split set
+ * (.iso.001, .iso.002, ...). All offsets/sizes are in bytes
+ * spanning the whole logical file; the implementation handles
+ * crossing per-part boundaries.
+ *
+ * A single .iso has parts == 1 with that one file. A split set
+ * is detected by trying <path>.001 if <path> doesn't exist. */
+#define ISO_FILE_MAX_PARTS 16
+
+typedef struct {
+  int single_mode;
+  char base[280]; /* path the user picked, without any .NNN suffix */
+  int parts;
+  uint64_t part_sizes[ISO_FILE_MAX_PARTS];
+  uint64_t total;
+
+  int fd;                /* currently open part fd, -1 if none */
+  int cur_part;          /* index into part_sizes */
+  uint64_t cur_part_pos; /* byte position within cur_part */
+} iso_file_t;
+
+int iso_file_open(iso_file_t *f, const char *path);
+int iso_file_seek(iso_file_t *f, uint64_t offset); /* SEEK_SET semantics */
+int iso_file_read(iso_file_t *f, void *buf, uint32_t want);
+void iso_file_close(iso_file_t *f);
 
 #endif

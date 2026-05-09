@@ -80,6 +80,16 @@ deploy TARGET:
 usb-list:
     @lsblk -p -o NAME,SIZE,TRAN,MOUNTPOINT,LABEL | awk 'NR==1 || $3=="usb"'
 
+# Split a >4 GB ISO into 4 GB chunks for FAT32. Output is a set of
+# .001, .002, ... files alongside the original. The installer
+# detects them by the ".001" first-part suffix and streams across
+# the parts as one logical ISO.
+#   just split-iso ~/Downloads/devil-may-cry.iso
+split-iso ISO:
+    @test -f "{{ISO}}" || { echo "not a file: {{ISO}}" >&2; exit 1; }
+    split -b 4000M --numeric-suffixes=1 -a 3 "{{ISO}}" "{{ISO}}."
+    @ls -la "{{ISO}}"*
+
 # Format every C source/header in-place via clang-format.
 fmt:
     @clang-format -i src/*.c src/*.h test/*.c

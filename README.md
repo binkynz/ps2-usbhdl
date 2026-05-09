@@ -190,7 +190,17 @@ known-incomplete:
   single-layer discs misidentified by size and breaks for true
   DVD9.
 - **Non-FAT32 USB.** `bdmfs_fatfs` is the only filesystem driver
-  embedded; exFAT/NTFS sticks won't enumerate.
+  embedded; exFAT/NTFS sticks won't enumerate. For ISOs over the
+  FAT32 4 GB single-file limit, use the split-file workflow:
+
+  ```sh
+  just split-iso ~/Downloads/big-game.iso
+  # produces big-game.iso.001, big-game.iso.002, ...
+  cp ~/Downloads/big-game.iso.* /mnt/usb/
+  ```
+
+  The installer detects the `.001` first-part suffix and streams
+  across the parts as one logical ISO.
 - **Batch install.** Currently one ISO per run. Multi-ISO mode
   with a "stage all, install all" flow is plausible but unwritten.
 - **Resumable installs.** If streaming fails partway through,
