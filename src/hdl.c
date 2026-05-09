@@ -107,7 +107,13 @@ int execute_install(const install_plan_t *plan) {
            plan->main_size_str);
 
   scr_printf("  fileXioOpen: %s\n", create_cmd);
-  int fd = fileXioOpen(create_cmd, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  /* Use FIO_O_* (PS2 IOP-side flag values) rather than newlib's
+   * POSIX O_*. They differ — FIO_O_WRONLY=0x02 vs newlib O_WRONLY=0x01
+   * — and apa-hdl's ioctl2AddSub does `if (!(mode & O_WRONLY)) return
+   * -EACCES;` against the FIO value, so passing newlib's bit yields
+   * EACCES on HIOCADDSUB despite the partition opening fine. */
+  int fd =
+      fileXioOpen(create_cmd, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC, 0644);
   if (fd < 0) {
     scr_printf("  open failed: %d\n", fd);
     return -1;
@@ -185,7 +191,7 @@ int stream_iso_to_partition(const install_plan_t *plan, const char *iso_path) {
   scr_printf("ok\n");
 
   scr_printf("  fileXioOpen     ");
-  int hdl_fd = fileXioOpen("hdl0:", O_RDWR);
+  int hdl_fd = fileXioOpen("hdl0:", FIO_O_RDWR);
   if (hdl_fd < 0) {
     scr_printf("FAIL %d\n", hdl_fd);
     fileXioUmount("hdl0:");
