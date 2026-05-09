@@ -24,10 +24,12 @@ games onto the internal HDD. `ps2-usbhdl` fills that gap.
 ## Status
 
 **Alpha (v0.1.0-alpha).** End-to-end install + boot validated on
-real hardware (fat PS2 + Gamestar HDD adapter) with a hand-built
-test ISO. First real-game install (Ratchet & Clank, ~4 GB DVD)
-verified through the streaming step; final OPL launch under
-verification.
+real hardware (fat PS2 + Gamestar HDD adapter), against both a
+hand-built test ISO and a real game — Ratchet & Clank
+(`SCUS_971.99`, NTSC-US, ~4 GB single-layer DVD). The full
+pipeline (USB read → ISO9660 / SYSTEM.CNF parse → APA partition
+create + HDL header format → ~67 min stream → OPL launch into
+title screen) is confirmed working.
 
 What works:
 
