@@ -13,7 +13,7 @@ IRX_OBJS  = $(addprefix $(EE_BUILD_DIR)/, $(addsuffix _irx.o, $(IRX_NAMES)))
 
 EE_OBJS = $(EE_BUILD_DIR)/main.o $(IRX_OBJS)
 
-EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio
+EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches
 
 all: $(EE_BIN)
 

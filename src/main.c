@@ -5,6 +5,7 @@
 #include <loadfile.h>
 #include <iopcontrol.h>
 #include <iopheap.h>
+#include <sbv_patches.h>
 
 /* NEWLIB_PORT_AWARE silences PS2SDK's #error guard that otherwise
  * warns against direct fileXio use under newlib. We need fileXioInit
@@ -45,12 +46,24 @@ static void boot_iop_with_modules(void)
 	SifLoadFileInit();
 	SifInitIopHeap();
 
+	/* The default rom0:LOADFILE RPC doesn't support
+	 * LoadModuleBuffer; without this patch our SifExecModuleBuffer
+	 * calls would write bytes but never actually start the module,
+	 * which makes downstream Init() calls hang forever waiting for
+	 * RPC servers that were never registered. */
+	sbv_patch_enable_lmb();
+	sbv_patch_disable_prefix_check();
+
 	scr_printf("\n  loading IOP modules:\n");
 	load_irx("iomanX",   iomanX_irx,   size_iomanX_irx,   0, NULL);
 	load_irx("fileXio",  fileXio_irx,  size_fileXio_irx,  0, NULL);
+	scr_printf("    fileXioInit()...\n");
 	fileXioInit();
+	scr_printf("    fileXioInit ok\n");
 	load_irx("poweroff", poweroff_irx, size_poweroff_irx, 0, NULL);
+	scr_printf("    poweroffInit()...\n");
 	poweroffInit();
+	scr_printf("    poweroffInit ok\n");
 	load_irx("ps2dev9",  ps2dev9_irx,  size_ps2dev9_irx,  0, NULL);
 	load_irx("ps2atad",  ps2atad_irx,  size_ps2atad_irx,  0, NULL);
 	load_irx("ps2hdd",   ps2hdd_irx,   size_ps2hdd_irx,
