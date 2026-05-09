@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.a
+*.elf
+*.irx
+build/
+dist/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local environment
+.env
+.env.local
