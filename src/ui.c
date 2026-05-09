@@ -35,6 +35,21 @@ int pad_init(void) {
   return 0;
 }
 
+/* Snapshot currently-held buttons. Returns the active-high bitmask
+ * (0 if the pad isn't readable yet within ~100 ms). Use this to
+ * seed prev_pressed at menu entry so buttons held over from a
+ * previous menu's confirm don't immediately re-fire here. */
+static int pad_snapshot(void) {
+  struct padButtonStatus pad;
+  int tries = 10;
+  while (tries-- > 0) {
+    if (padRead(0, 0, &pad) != 0)
+      return (~pad.btns) & 0xFFFF;
+    delay_ms(10);
+  }
+  return 0;
+}
+
 int pick_mode(void) {
   if (!pad_init())
     return -1;
@@ -47,7 +62,7 @@ int pick_mode(void) {
   enum { COUNT = 3 };
 
   int idx = 0;
-  int prev_pressed = 0;
+  int prev_pressed = pad_snapshot();
   int menu_y = scr_getY();
   int dirty = 1;
 
@@ -111,7 +126,7 @@ int pick_items(char items[][280], int count, int selected[]) {
   }
 
   int idx = 0;
-  int prev_pressed = 0;
+  int prev_pressed = pad_snapshot();
   int menu_y = scr_getY();
   int dirty = 1;
 
