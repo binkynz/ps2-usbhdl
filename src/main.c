@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -11,12 +12,14 @@
 #include "hdl.h"
 #include "ui.h"
 
-/* Wet-run gate: returns 1 only if mass:/INSTALL_NOW exists. The
- * sentinel-file approach makes accidental writes impossible —
- * user has to deliberately drop the file on the USB stick. */
-static int wet_run_authorized(void)
+/* Sentinel-file gate. Returns 1 only if the named file exists at
+ * mass:/<name>. Used to require a deliberate per-action opt-in
+ * before any destructive op runs. */
+static int sentinel_present(const char *name)
 {
-	int fd = open("mass:/INSTALL_NOW", O_RDONLY);
+	char path[64];
+	snprintf(path, sizeof(path), "mass:/%s", name);
+	int fd = open(path, O_RDONLY);
 	if (fd < 0) return 0;
 	close(fd);
 	return 1;
@@ -44,9 +47,12 @@ static int install_one(const install_plan_t *plan, const char *iso_path)
 	return stream_iso_to_partition(plan, iso_path);
 }
 
+/* Install flow: enumerate USB ISOs, batch-pick, plan, optionally
+ * install if INSTALL_NOW is present. */
 static void plan_install_from_usb(void)
 {
-	scr_printf("\n  waiting for USB...\n");
+	scr_printf("\n  install mode\n");
+	scr_printf("  waiting for USB...\n");
 
 	DIR *d = NULL;
 	int tries;
@@ -81,14 +87,13 @@ static void plan_install_from_usb(void)
 	}
 
 	static int selected[MAX_ISOS];
-	int n_selected = pick_isos(isos, iso_count, selected);
+	int n_selected = pick_items(isos, iso_count, selected);
 	if (n_selected == 0) {
 		scr_printf("  aborted by user\n");
 		return;
 	}
 	scr_printf("  selected %d ISO(s)\n", n_selected);
 
-	/* Compute and print plans for everything we'd install. */
 	static install_plan_t plans[MAX_ISOS];
 	int i;
 	for (i = 0; i < iso_count; i++) {
@@ -98,7 +103,7 @@ static void plan_install_from_usb(void)
 		print_install_plan(&plans[i]);
 	}
 
-	if (!wet_run_authorized()) {
+	if (!sentinel_present("INSTALL_NOW")) {
 		scr_printf("\n  (touch mass:/INSTALL_NOW to enable wet run)\n");
 		return;
 	}
@@ -121,6 +126,61 @@ static void plan_install_from_usb(void)
 	scr_printf("\n  batch done: %d ok, %d failed\n", ok, failed);
 }
 
+/* Manage flow: list installed HDL partitions, batch-pick, delete
+ * after a 10-second confirmation window. */
+static void manage_hdl_partitions(void)
+{
+	scr_printf("\n  manage mode\n");
+
+	static char names[MAX_PARTS][33];
+	static uint32_t sizes[MAX_PARTS];
+	int n = list_hdl_partitions(names, sizes, MAX_PARTS);
+	if (n < 0) {
+		scr_printf("  ABORT: cannot enumerate hdd0:\n");
+		return;
+	}
+	if (n == 0) {
+		scr_printf("  no HDL partitions on hdd0:\n");
+		return;
+	}
+	scr_printf("  %d HDL partition%s:\n", n, n == 1 ? "" : "s");
+
+	/* Build display strings ("PP.HDL.SCUS_971.99 — 4096 MB") for
+	 * the picker. */
+	static char display[MAX_PARTS][280];
+	int i;
+	for (i = 0; i < n; i++)
+		snprintf(display[i], sizeof(display[0]),
+		         "%-24.32s %5u MB",
+		         names[i], (unsigned)sizes[i]);
+
+	static int selected[MAX_PARTS];
+	int n_sel = pick_items(display, n, selected);
+	if (n_sel == 0) {
+		scr_printf("  aborted by user\n");
+		return;
+	}
+
+	scr_printf("\n  DELETE %d partition%s in 10s. POWER OFF to abort.\n",
+	           n_sel, n_sel == 1 ? "" : "s");
+	delay_ms(10000);
+
+	int ok = 0, failed = 0;
+	for (i = 0; i < n; i++) {
+		if (!selected[i]) continue;
+		scr_printf("  removing %s...\n", names[i]);
+		int rret = partition_remove(names[i]);
+		if (rret == 0) {
+			ok++;
+		} else {
+			scr_printf("    failed: %d\n", rret);
+			failed++;
+		}
+	}
+
+	scr_printf("\n  delete done: %d ok, %d failed\n", ok, failed);
+}
+
 int main(int argc, char *argv[])
 {
 	(void)argc; (void)argv;
@@ -131,7 +191,14 @@ int main(int argc, char *argv[])
 
 	boot_iop_with_modules();
 	show_hdd();
-	plan_install_from_usb();
+
+	/* Mode dispatch via sentinel files on the USB stick. Manage
+	 * takes precedence so an accidental MANAGE_NOW + INSTALL_NOW
+	 * combo doesn't silently install instead of asking. */
+	if (sentinel_present("MANAGE_NOW"))
+		manage_hdl_partitions();
+	else
+		plan_install_from_usb();
 
 	scr_printf("\n  done. power-cycle to return.\n");
 	SleepThread();

@@ -33,7 +33,7 @@ static int pad_init_port0(void)
 	return 0;
 }
 
-int pick_isos(char isos[MAX_ISOS][280], int count, int selected[MAX_ISOS])
+int pick_items(char items[][280], int count, int selected[])
 {
 	int i;
 	for (i = 0; i < count; i++) selected[i] = 0;
@@ -45,7 +45,7 @@ int pick_isos(char isos[MAX_ISOS][280], int count, int selected[MAX_ISOS])
 	}
 
 	if (!pad_init_port0()) {
-		scr_printf("  no pad - selecting first only: %s\n", isos[0]);
+		scr_printf("  no pad - selecting first only: %s\n", items[0]);
 		selected[0] = 1;
 		return 1;
 	}
@@ -63,7 +63,7 @@ int pick_isos(char isos[MAX_ISOS][280], int count, int selected[MAX_ISOS])
 				scr_printf("    %c [%c] %s",
 				           i == idx ? '>' : ' ',
 				           selected[i] ? '*' : ' ',
-				           isos[i]);
+				           items[i]);
 			}
 			scr_clearline(menu_y + count);
 			scr_setXY(0, menu_y + count);

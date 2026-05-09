@@ -29,4 +29,10 @@ int  execute_install(const install_plan_t *plan);
 int  stream_iso_to_partition(const install_plan_t *plan,
                              const char *iso_path);
 
+/* Walk hdd0: collecting partitions of type APA_TYPE_HDL (0x1337).
+ * Writes up to `max` bare names + sizes (in MB) into the caller's
+ * arrays. Returns the count, or -1 on enumeration failure. */
+int  list_hdl_partitions(char names[][33], uint32_t sizes_mb[],
+                         int max);
+
 #endif

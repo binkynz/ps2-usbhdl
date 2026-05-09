@@ -80,6 +80,26 @@ int partition_remove(const char *target)
 	return fileXioRemove(hdd_path);
 }
 
+int list_hdl_partitions(char names[][33], uint32_t sizes_mb[], int max)
+{
+	int dd = fileXioDopen("hdd0:");
+	if (dd < 0) return -1;
+
+	iox_dirent_t de;
+	int n = 0;
+	while (n < max && fileXioDread(dd, &de) > 0) {
+		if (de.stat.mode != APA_TYPE_HDL) continue;
+		/* APA names cap at 32 chars; copy with explicit null. */
+		memcpy(names[n], de.name, 32);
+		names[n][32] = 0;
+		/* dirent size is in 512-byte sectors; /2048 -> MB. */
+		sizes_mb[n] = de.stat.size / 2048;
+		n++;
+	}
+	fileXioDclose(dd);
+	return n;
+}
+
 int execute_install(const install_plan_t *plan)
 {
 	char hdd_path[64];      /* hdd0:<name> */
