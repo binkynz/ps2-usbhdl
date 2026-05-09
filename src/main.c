@@ -201,7 +201,7 @@ int main(int argc, char *argv[]) {
     break;
   }
 
-  scr_printf("\n  done. power-cycle to return.\n");
-  SleepThread();
+  scr_printf("\n  done. press any button to exit.\n");
+  wait_for_any_button();
   return 0;
 }

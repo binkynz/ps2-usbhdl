@@ -50,6 +50,26 @@ static int pad_snapshot(void) {
   return 0;
 }
 
+void wait_for_any_button(void) {
+  if (!pad_init()) {
+    /* No pad — we can't notice a button press, so just block. */
+    SleepThread();
+    return;
+  }
+  int prev_pressed = pad_snapshot();
+  for (;;) {
+    struct padButtonStatus pad;
+    if (padRead(0, 0, &pad) != 0) {
+      int pressed = (~pad.btns) & 0xFFFF;
+      int newly = pressed & ~prev_pressed;
+      prev_pressed = pressed;
+      if (newly)
+        return;
+    }
+    delay_ms(50);
+  }
+}
+
 int pick_mode(void) {
   if (!pad_init())
     return -1;

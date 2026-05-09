@@ -29,4 +29,10 @@ int pick_mode(void);
  * the first item. */
 int pick_items(char items[][280], int count, int selected[]);
 
+/* Block until the user presses any button. Falls back to
+ * SleepThread() if the pad isn't available. Used as the final
+ * "done — press any button to exit" prompt so the EE/IOP don't
+ * idle forever holding the framebuffer + HDD modules awake. */
+void wait_for_any_button(void);
+
 #endif
