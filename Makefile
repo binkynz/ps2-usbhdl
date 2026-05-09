@@ -21,7 +21,12 @@ VENDOR_IRX_NAMES = ps2hdd_hdl hdlfs
 IRX_NAMES = $(PS2SDK_IRX_NAMES) $(VENDOR_IRX_NAMES)
 IRX_OBJS  = $(addprefix $(EE_BUILD_DIR)/, $(addsuffix _irx.o, $(IRX_NAMES)))
 
-EE_OBJS = $(EE_BUILD_DIR)/main.o $(IRX_OBJS)
+EE_OBJS = $(EE_BUILD_DIR)/main.o \
+          $(EE_BUILD_DIR)/iop.o \
+          $(EE_BUILD_DIR)/iso.o \
+          $(EE_BUILD_DIR)/hdl.o \
+          $(EE_BUILD_DIR)/ui.o \
+          $(IRX_OBJS)
 
 EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches -lpad
 
