@@ -80,6 +80,22 @@ deploy TARGET:
 usb-list:
     @lsblk -p -o NAME,SIZE,TRAN,MOUNTPOINT,LABEL | awk 'NR==1 || $3=="usb"'
 
+# Extract PS2SDK headers to .ps2sdk/ so clangd / your LSP can resolve
+# <kernel.h>, <fileXio_rpc.h>, etc. Run once after cloning. The
+# extracted tree is gitignored; re-run if PS2SDK upstream changes.
+lsp:
+    #!/bin/sh
+    set -eu
+    docker build -q -t ps2-usbhdl-build:latest . >/dev/null
+    rm -rf .ps2sdk
+    mkdir -p .ps2sdk/ee .ps2sdk/common
+    cid=$(docker create ps2-usbhdl-build:latest)
+    trap 'docker rm -f $cid >/dev/null 2>&1 || true' EXIT
+    docker cp "$cid:/usr/local/ps2dev/ps2sdk/ee/include"     .ps2sdk/ee/
+    docker cp "$cid:/usr/local/ps2dev/ps2sdk/common/include" .ps2sdk/common/
+    echo
+    echo "  .ps2sdk/ populated. Restart your editor's clangd to pick it up."
+
 # Remove host + container build artifacts.
 clean:
     docker run --rm \

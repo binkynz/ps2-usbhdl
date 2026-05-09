@@ -20,3 +20,8 @@ dist/
 # Cloned third-party sources (binaries we use are committed under
 # vendor/irx/, but the upstream source trees are large and recloneable)
 vendor/src/
+
+# PS2SDK headers extracted from the build container for clangd LSP.
+# Run `just lsp` once after cloning to populate. Not committed.
+.ps2sdk/
+.cache/             # clangd's index cache

@@ -1,0 +1,28 @@
+# clangd LSP config for editors that aren't aware this is a
+# cross-compiled PS2 EE project.
+#
+# PS2SDK headers live inside the build container. Run `just lsp`
+# once after cloning to extract them to .ps2sdk/ on the host.
+#
+# The defines mirror what the project Makefile passes when
+# invoking the EE compiler (see Makefile.eeglobal in PS2SDK).
+# NEWLIB_PORT_AWARE silences the #error guards in PS2SDK's
+# fileXio headers; same as in our .c files.
+
+CompileFlags:
+  Add:
+    - -D_EE
+    - -DNEWLIB_PORT_AWARE
+    - -I.ps2sdk/ee/include
+    - -I.ps2sdk/common/include
+  Remove:
+    - -G0           # MIPS small-data threshold; not a host-clang flag
+    - -gdwarf-2
+    - -gz
+
+Diagnostics:
+  Suppress:
+    # PS2SDK headers occasionally use GCC-specific attributes that
+    # clang treats as unknown but that don't actually affect
+    # checking; silence noise without hiding real issues.
+    - -Wunknown-attributes

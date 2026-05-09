@@ -17,6 +17,22 @@ You need:
   image; nothing PS2-specific is installed on the host)
 - [`just`](https://github.com/casey/just) for the task runner
 
+## Editor / LSP setup
+
+PS2SDK headers live inside the build container, so out-of-the-box
+clangd will fail to resolve `<kernel.h>`, `<fileXio_rpc.h>`, and
+similar. One-time setup:
+
+```sh
+just lsp
+```
+
+extracts `$PS2SDK/ee/include` and `$PS2SDK/common/include` from the
+container into `.ps2sdk/` on the host. The committed `.clangd`
+config picks them up via `-I.ps2sdk/ee/include` /
+`-I.ps2sdk/common/include`. `.ps2sdk/` is gitignored. Re-run `just
+lsp` if the upstream PS2SDK in the docker image changes.
+
 ## Build / test cycle
 
 ```sh
