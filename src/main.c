@@ -139,6 +139,27 @@ static int ends_with_iso(const char *name)
 	        (e[3] == 'o' || e[3] == 'O'));
 }
 
+/* Mirror of HDLGameInstaller's hdlfs/hdlfs.h struct HDLFS_FormatArgs.
+ * Passed to fileXioFormat("hdl0:", partname, &args, sizeof(args))
+ * after the partition has been created. The hdlfs.irx module reads
+ * this and writes the HDL header bytes (game info magic, partition
+ * descriptors, system.cnf etc.) into the first 4 MB of the partition.
+ * Layout must match exactly — wrong padding here = wrong on-disk
+ * header = unbootable game (or worse, a confused APA driver). */
+#define HDLFS_GAME_TITLE_LEN  160
+#define HDLFS_STARTUP_PTH_LEN 60
+
+struct HDLFS_FormatArgs {
+	uint8_t  CompatFlags;
+	uint8_t  DiscType;       /* 0x12 = CD, 0x14 = DVD */
+	uint8_t  TRType;
+	uint8_t  TRMode;
+	uint32_t NumSectors;     /* total 2 KB sectors of disc data */
+	uint32_t Layer1Start;    /* sector offset of layer 1 for DVD9, else 0 */
+	char     GameTitle[HDLFS_GAME_TITLE_LEN];
+	char     StartupPath[HDLFS_STARTUP_PTH_LEN];
+};
+
 /* Plan the HDL partition layout for an ISO. Pure computation — no
  * disk side-effects, suitable for dry-run display. */
 typedef struct {
@@ -146,10 +167,13 @@ typedef struct {
 	char volume_id[33];          /* from ISO9660 PVD */
 	char startup_id[16];         /* from SYSTEM.CNF, e.g. "SCES_503.62" */
 	uint32_t iso_size_mb;
+	uint32_t iso_sectors_2k;     /* PVD blocks × block_size / 2048 */
 	char partition_name[33];     /* APA partition name, e.g. PP.HDL.SCES_503.62 */
 	uint32_t main_part_size_mb;
 	int subs_needed;             /* >0 only for ISOs > ~16 GB */
 	uint32_t subs_total_size_mb;
+	uint8_t  disc_type;          /* HDLFS DiscType: 0x12 CD / 0x14 DVD */
+	uint32_t layer1_start;       /* 0 unless DVD9 */
 } install_plan_t;
 
 typedef struct {
@@ -306,11 +330,23 @@ static int compute_install_plan(const char *iso_path, install_plan_t *plan)
 	for (j = 31; j >= 0 && plan->volume_id[j] == ' '; j--)
 		plan->volume_id[j] = 0;
 
-	/* ISO size in MB from PVD volume size × block size. */
+	/* ISO size in MB from PVD volume size × block size, plus the
+	 * 2 KB sector count which is what HDLFS_FormatArgs.NumSectors
+	 * wants. PS2 disc data is always 2048-byte sectors so the
+	 * sector count = PVD block count when block_size = 2048 (which
+	 * it always is for PS2 ISOs). */
 	uint32_t blocks = pvd[80] | (pvd[81] << 8) |
 	                  (pvd[82] << 16) | (pvd[83] << 24);
 	uint32_t bsz = pvd[128] | (pvd[129] << 8);
 	plan->iso_size_mb = (uint32_t)((blocks * (uint64_t)bsz) >> 20);
+	plan->iso_sectors_2k = (uint32_t)((blocks * (uint64_t)bsz) >> 11);
+
+	/* Disc type and layer break heuristics. CD ISOs are usually
+	 * <800 MB; anything bigger is a DVD. DVD9 (>4.7 GB) needs a
+	 * layer-break offset, but detecting that from an ISO file alone
+	 * isn't trivial — we punt for now; single-layer DVDs work. */
+	plan->disc_type = (plan->iso_size_mb < 800) ? 0x12 : 0x14;
+	plan->layer1_start = 0;
 
 	/* Best-effort startup id from SYSTEM.CNF. If it fails we still
 	 * have a usable plan, just with a less-canonical partition name. */
@@ -371,12 +407,15 @@ static void print_install_plan(const install_plan_t *plan)
 		return;
 	}
 	scr_printf("\n  install plan (DRY RUN):\n");
-	scr_printf("    volume:    %s (%u MB)\n",
-	           plan->volume_id, (unsigned)plan->iso_size_mb);
-	scr_printf("    startup:   %s\n",
-	           plan->startup_id[0] ? plan->startup_id : "(SYSTEM.CNF parse failed)");
-	scr_printf("    partname:  %s\n", plan->partition_name);
-	scr_printf("    main part: %u MB\n", (unsigned)plan->main_part_size_mb);
+	scr_printf("    partname:  %s (%u MB)\n",
+	           plan->partition_name, (unsigned)plan->main_part_size_mb);
+	scr_printf("    iso:       %s / %u MB / %u sectors\n",
+	           plan->startup_id[0] ? plan->startup_id : "?",
+	           (unsigned)plan->iso_size_mb,
+	           (unsigned)plan->iso_sectors_2k);
+	scr_printf("    title:     %s\n", plan->volume_id);
+	scr_printf("    fmt args:  disc=0x%02x layer1=%u\n",
+	           plan->disc_type, (unsigned)plan->layer1_start);
 	if (plan->subs_needed > 0)
 		scr_printf("    sub parts: %d (%u MB total)\n",
 		           plan->subs_needed, (unsigned)plan->subs_total_size_mb);
