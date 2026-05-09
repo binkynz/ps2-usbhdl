@@ -30,6 +30,9 @@ EE_OBJS = $(EE_BUILD_DIR)/main.o \
 
 EE_LIBS = -ldebug -lhdd -lpoweroff -lfileXio -lpatches -lpad
 
+# Tighten warnings beyond Makefile.eeglobal's default -Wall.
+EE_CFLAGS += -Wextra -Werror -Wno-unused-parameter
+
 all: $(EE_BIN)
 
 # bin2c turns a .irx into a C file with `unsigned char <name>[]`
