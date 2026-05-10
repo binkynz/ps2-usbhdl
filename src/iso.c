@@ -86,7 +86,13 @@ static uint64_t iso_file_part_size(int fd) {
   off_t cur = lseek(fd, 0, SEEK_CUR);
   off_t end = lseek(fd, 0, SEEK_END);
   lseek(fd, cur, SEEK_SET);
-  return (uint64_t)end;
+  if (end == (off_t)-1)
+    return 0xFFFFFFFFULL;
+  /* PS2SDK off_t is 32-bit signed: a 2-4 GB FAT32 file size fits
+   * in unsigned 32-bit but lseek hands it back as a negative
+   * signed value, which sign-extends into garbage when widened to
+   * uint64_t. Reinterpret through uint32_t to get the true size. */
+  return (uint64_t)(uint32_t)end;
 }
 
 int iso_file_open(iso_file_t *f, const char *path) {
@@ -166,25 +172,30 @@ int iso_file_read(iso_file_t *f, void *buf, uint32_t want) {
   uint32_t total = 0;
 
   while (want > 0) {
-    if (f->cur_part >= f->parts)
-      break;
+    if (f->fd < 0) {
+      if (f->cur_part >= f->parts)
+        break;
+      if (iso_file_open_part(f, f->cur_part) < 0)
+        break;
+    }
 
-    uint64_t part_remaining = f->part_sizes[f->cur_part] - f->cur_part_pos;
-    if (part_remaining == 0) {
-      /* End of current part — advance to the next, if any. */
+    int got = read(f->fd, p, want);
+    if (got < 0)
+      break;
+    if (got == 0) {
+      /* EOF on this part — roll over to the next, if any. We use
+       * read==0 rather than comparing cur_part_pos to part_sizes
+       * because PS2SDK off_t is 32-bit signed and lseek(SEEK_END)
+       * misreports any FAT32 file >= 2 GB; EOF-on-read is the
+       * source of truth at the part boundary. */
       close(f->fd);
       f->fd = -1;
       if (f->cur_part + 1 >= f->parts)
         break;
-      if (iso_file_open_part(f, f->cur_part + 1) < 0)
-        break;
+      f->cur_part++;
+      f->cur_part_pos = 0;
       continue;
     }
-
-    uint32_t chunk = (want > part_remaining) ? (uint32_t)part_remaining : want;
-    int got = read(f->fd, p, chunk);
-    if (got <= 0)
-      break;
     p += got;
     total += got;
     want -= got;
