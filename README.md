@@ -181,12 +181,13 @@ The path that's been validated covers single-layer DVDs up to
 ~4 GB on a single APA partition. Beyond that, several things are
 known-incomplete:
 
-- **Sub-partitions for >4 GB games.** Implemented but
-  unverified on real hardware — the only large ISO this session
-  exercised was 4 GB (single-partition path). `execute_install`
-  chains `HIOCADDSUB` ioctls for each planned sub before format.
-  Exercising the multi-partition path needs a DVD9 / >4 GB ISO
-  and a real install run.
+- **OPL compatibility modes.** Some games launch to a black
+  screen with default OPL settings and need one or more of OPL's
+  per-game compatibility modes enabled (press Triangle on the
+  game in OPL's HDD list). Devil May Cry 1 (NTSC-US) needs Mode 1
+  ("IOP: HDD module"), for example. The installer doesn't ship a
+  compat database; if a freshly installed game won't boot, try
+  Mode 1 first.
 - **DVD9 layer-break detection.** No automatic detection from
   the ISO file (the layer break lives in physical-layer
   descriptors most rip tools strip). Sidecar override accepted:
