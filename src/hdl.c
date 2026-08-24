@@ -55,6 +55,17 @@ void show_hdd(void) {
   scr_printf("\n");
 }
 
+uint32_t hdd_get_max_partition_size_mb(void) {
+  t_hddInfo info;
+
+  if (hddCheckPresent() != 0 || hddCheckFormatted() != 0)
+    return 0;
+
+  hddGetInfo(&info);
+
+  return info.hddMaxPartitionSize;
+}
+
 int partition_exists(const char *target) {
   int dd = fileXioDopen("hdd0:");
   if (dd < 0)

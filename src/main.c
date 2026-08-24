@@ -96,12 +96,13 @@ static void plan_install_from_usb(void) {
   scr_printf("  selected %d ISO(s)\n", n_selected);
 
   static install_plan_t plans[MAX_ISOS];
+  uint32_t max_partition_mb = hdd_get_max_partition_size_mb();
   int i;
   for (i = 0; i < iso_count; i++) {
     if (!selected[i])
       continue;
     scr_printf("\n  -- %s --\n", isos[i]);
-    compute_install_plan(isos[i], &plans[i]);
+    compute_install_plan(isos[i], &plans[i], max_partition_mb);
     print_install_plan(&plans[i]);
   }
 

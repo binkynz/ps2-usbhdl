@@ -6,6 +6,10 @@
 /* Print HDD presence + size summary + PFS partition names. */
 void show_hdd(void);
 
+/* Return the HDD/APA maximum partition size in MB.
+ * Returns 0 if the HDD is not present or not APA-formatted. */
+uint32_t hdd_get_max_partition_size_mb(void);
+
 /* 1 if an APA partition with this exact bare name exists, 0 if
  * not, -1 on enumeration failure. Compared against the bare names
  * fileXioDread returns (no "hdd0:" prefix). */

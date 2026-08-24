@@ -10,11 +10,12 @@
 
 /* HDL partition layout constants. Main partitions reserve 4 MB
  * for the HDL header zone; sub-partitions reserve ~1 MB. The APA
- * driver only accepts six specific size strings ("128M" through
- * "4G") so we round up to one of those rather than to an arbitrary
- * 128 MB grain. The hardware APA cap is 16 GB per partition, but
- * HDLFS records slice size in a 32-bit field and overflows at
- * 4 GB, so 4 GB is our effective ceiling. */
+ * driver accepts specific size strings ("128M" through "32G") so
+ * we round up to one of those rather than to an arbitrary 128 MB
+ * grain. APA limits a newly-created partition to approximately
+ * 1/32 of the HDD capacity; HDL_MAX_PARTITION_MB provides an
+ * additional enforced ceiling because HDLFS records slice size in a
+ * 32-bit field and overflows at the effective HDL limit. */
 #define HDL_MAIN_RESERVE_MB 4
 #define HDL_SUB_RESERVE_MB 1
 #define HDL_MAX_PARTITION_MB 4096
@@ -26,16 +27,27 @@ struct apa_bucket {
 static const struct apa_bucket APA_BUCKETS[] = {
     {"128M", 128}, {"256M", 256}, {"512M", 512},
     {"1G", 1024},  {"2G", 2048},  {"4G", 4096},
+    {"8G", 8192},  {"16G", 16384},  {"32G", 32768},
 };
 #define APA_BUCKET_COUNT (sizeof(APA_BUCKETS) / sizeof(APA_BUCKETS[0]))
 
-/* Smallest bucket whose size >= needed_mb. Returns the largest
- * bucket if nothing is big enough (caller spills to subs). */
-static int pick_bucket(uint32_t needed_mb) {
-  for (size_t i = 0; i < APA_BUCKET_COUNT; i++)
+/* Smallest bucket whose size >= needed_mb and does not exceed
+ * max_partition_mb. Returns the largest allowed bucket if nothing
+ * is big enough. */
+static int pick_bucket(uint32_t needed_mb, uint32_t max_partition_mb) {
+  int largest = -1;
+
+  for (size_t i = 0; i < APA_BUCKET_COUNT; i++) {
+    if (APA_BUCKETS[i].mb > max_partition_mb)
+      break;
+
+    largest = (int)i;
+
     if (APA_BUCKETS[i].mb >= needed_mb)
       return (int)i;
-  return APA_BUCKET_COUNT - 1;
+  }
+
+  return largest;
 }
 
 typedef struct {
@@ -321,8 +333,16 @@ static int extract_startup_id(iso_file_t *f, const unsigned char *pvd,
   return n > 0 ? 0 : -1;
 }
 
-int compute_install_plan(const char *iso_path, install_plan_t *plan) {
+int compute_install_plan(const char *iso_path, install_plan_t *plan, uint32_t hdd_max_partition_mb) {
   memset(plan, 0, sizeof(*plan));
+
+  uint32_t max_partition_mb = hdd_max_partition_mb;
+
+  if (max_partition_mb > HDL_MAX_PARTITION_MB)
+      max_partition_mb = HDL_MAX_PARTITION_MB;
+
+  if (max_partition_mb < APA_BUCKETS[0].mb)
+    return -1;
 
   iso_file_t f;
   if (iso_file_open(&f, iso_path) < 0)
@@ -393,24 +413,25 @@ int compute_install_plan(const char *iso_path, install_plan_t *plan) {
            san);
 
   /* Size the main partition by picking the smallest APA bucket
-   * that fits iso + header reserve. If even the largest bucket
-   * (4 GB) isn't enough, spill the rest into sub-partitions. */
+   * that fits iso + header reserve. If the maximum allowed bucket
+   * isn't enough, spill the rest into sub-partitions. */
   uint32_t needed_mb = plan->iso_size_mb + HDL_MAIN_RESERVE_MB;
-  if (needed_mb <= HDL_MAX_PARTITION_MB) {
-    int bk = pick_bucket(needed_mb);
+  if (needed_mb <= max_partition_mb) {
+    int bk = pick_bucket(needed_mb, max_partition_mb);
     plan->main_part_size_mb = APA_BUCKETS[bk].mb;
     plan->main_size_str = APA_BUCKETS[bk].str;
     plan->subs_needed = 0;
     plan->subs_total_size_mb = 0;
   } else {
-    plan->main_part_size_mb = HDL_MAX_PARTITION_MB;
-    plan->main_size_str = APA_BUCKETS[APA_BUCKET_COUNT - 1].str;
-    uint32_t main_data = HDL_MAX_PARTITION_MB - HDL_MAIN_RESERVE_MB;
+    int main_bk = pick_bucket(max_partition_mb, max_partition_mb);
+    plan->main_part_size_mb = APA_BUCKETS[main_bk].mb;
+    plan->main_size_str = APA_BUCKETS[main_bk].str;
+    uint32_t main_data = plan->main_part_size_mb - HDL_MAIN_RESERVE_MB;
     uint32_t remaining = plan->iso_size_mb - main_data;
     plan->subs_needed = 0;
     plan->subs_total_size_mb = 0;
     while (remaining > 0 && plan->subs_needed < MAX_SUBS) {
-      int bk = pick_bucket(remaining + HDL_SUB_RESERVE_MB);
+      int bk = pick_bucket(remaining + HDL_SUB_RESERVE_MB, max_partition_mb);
       uint32_t this_part = APA_BUCKETS[bk].mb;
       uint32_t this_data = this_part - HDL_SUB_RESERVE_MB;
       if (this_data > remaining)

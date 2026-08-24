@@ -36,7 +36,7 @@ int ends_with_iso(const char *name);
  * directly opened by the user. */
 int is_iso_split_first_part(const char *name);
 
-int compute_install_plan(const char *iso_path, install_plan_t *plan);
+int compute_install_plan(const char *iso_path, install_plan_t *plan, uint32_t hdd_max_partition_mb);
 void print_install_plan(const install_plan_t *plan);
 
 /* Logical-file abstraction over a single .iso or a split set
