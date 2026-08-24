@@ -452,23 +452,42 @@ void print_install_plan(const install_plan_t *plan) {
     scr_printf("\n  install plan: invalid (PVD parse failed)\n");
     return;
   }
+
   scr_printf("\n  install plan (DRY RUN):\n");
-  scr_printf("    partname:  %s (%u MB)\n", plan->partition_name,
+
+  scr_printf("    partname:  %s\n", plan->partition_name);
+
+  scr_printf("    partitions:\n");
+  scr_printf("      [0] %u MB  (main)\n",
              (unsigned)plan->main_part_size_mb);
+
+  int i;
+  for (i = 0; i < plan->subs_needed; i++) {
+    size_t j;
+    for (j = 0; j < APA_BUCKET_COUNT; j++) {
+      if (strcmp(plan->sub_size_strs[i], APA_BUCKETS[j].str) == 0) {
+        scr_printf("      [%d] %u MB  (sub)\n", i + 1,
+                   (unsigned)APA_BUCKETS[j].mb);
+        break;
+      }
+    }
+  }
+
+  scr_printf("      total: %u MB\n",
+             (unsigned)(plan->main_part_size_mb +
+                        plan->subs_total_size_mb));
+
   scr_printf("    iso:       %s / %u MB / %u sectors\n",
              plan->startup_id[0] ? plan->startup_id : "?",
              (unsigned)plan->iso_size_mb, (unsigned)plan->iso_sectors_2k);
+
   scr_printf("    title:     %s\n", plan->volume_id);
+
   scr_printf("    fmt args:  disc=0x%02x layer1=%u\n", plan->disc_type,
              (unsigned)plan->layer1_start);
+
   if (plan->iso_size_mb > 4500 && plan->layer1_start == 0)
     scr_printf("    WARNING: DVD9-sized; no .layer_break sidecar\n");
-  if (plan->subs_needed > 0) {
-    scr_printf("    sub parts: %d (%u MB total)\n", plan->subs_needed,
-               (unsigned)plan->subs_total_size_mb);
-    int i;
-    for (i = 0; i < plan->subs_needed; i++)
-      scr_printf("      [%d] %s\n", i + 1, plan->sub_size_strs[i]);
-  }
+
   scr_printf("  no writes performed.\n");
 }
